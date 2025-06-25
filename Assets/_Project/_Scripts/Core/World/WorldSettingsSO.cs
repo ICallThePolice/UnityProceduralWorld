@@ -33,4 +33,6 @@ public class WorldSettingsSO : ScriptableObject
     public NoiseSettingsSO heightmapNoiseSettings;
     public NoiseSettingsSO chaosNoiseSettings;
     public NoiseSettingsSO saturationNoiseSettings;
+    public NoiseSettingsSO detailNoiseSettings;
+public NoiseSettingsSO biomeBlendNoiseSettings;
 }

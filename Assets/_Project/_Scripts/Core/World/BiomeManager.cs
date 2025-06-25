@@ -281,35 +281,56 @@ public class BiomeManager : MonoBehaviour
     {
         // --- 1. Определяем, какой воксель использовать ---
         ushort finalVoxelID;
+        // Если у нас есть корневой биом, то мы берем его основной материал.
         if (overrideVoxelID.HasValue)
         {
             // Если нам передали ID для переопределения, используем его.
             finalVoxelID = overrideVoxelID.Value;
         }
-        else
+        else 
         {
             // Иначе, берем основной материал из корневого биома.
             finalVoxelID = rootBiome.settings.biome.MainVoxel.ID;
         }
 
-        // --- 2. Создаем текущий артефакт ---
+        // --- 2. Рассчитываем высоту/глубину артефакта ---
         const float maxArtifactThickness = 15.0f;
-        float calculatedHeight = rootBiome.settings.biome.verticalDisplacementScale * artifactSO.relativeHeight;
-        float finalHeight = Mathf.Min(calculatedHeight, maxArtifactThickness);
+        float calculatedHeight;
 
+        if (artifactSO.artifactType == BiomeArtifactType.MiniCrater)
+        {
+            // Кратеры теперь всегда используют полную силу вертикального смещения биома.
+            calculatedHeight = rootBiome.settings.biome.verticalDisplacementScale;
+        }
+        else
+        {
+            // Для других артефактов (например, островов) временно используем ту же логику,
+            // но ограничиваем максимальную толщину, чтобы они не были слишком массивными.
+            // В будущем сюда можно вернуть множитель 'relativeHeight' из BiomeArtifactSO, если понадобится гибкость.
+            calculatedHeight = Mathf.Min(rootBiome.settings.biome.verticalDisplacementScale, maxArtifactThickness);
+        }
+
+        // --- 3. Создаем экземпляр артефакта ---
         var parentArtifactInstance = new ArtifactInstance
         {
             position = artifactPos,
             settings = artifactSO,
             calculatedSize = new Vector2(finalSize, finalSize),
-            calculatedHeight = finalHeight,
+            calculatedHeight = calculatedHeight,
+            tiers = artifactSO.tiers,
             groundHeight = groundHeight,
             yOffset = yOffset,
             mainVoxelID = finalVoxelID
         };
         artifactListToFill.Add(parentArtifactInstance);
 
-        // --- 3. РЕКУРСИЯ: Ищем и создаем дочерние артефакты ---
+        // --- 4. РЕКУРСИЯ: Ищем и создаем дочерние артефакты ---
+        if (parentArtifactInstance.settings.childArtifacts == null || parentArtifactInstance.settings.childArtifacts.Count == 0)
+        {
+            return; // Выход из рекурсии
+        }
+    
+        // --- 3. РЕКУРСИЯ: Ищем и создаем дочерние артефакты (НОВАЯ ЛОГИКА С РЕЖИМАМИ) ---
         if (parentArtifactInstance.settings.childArtifacts == null || parentArtifactInstance.settings.childArtifacts.Count == 0)
         {
             return; // Выход из рекурсии
@@ -317,39 +338,69 @@ public class BiomeManager : MonoBehaviour
 
         foreach (var childPlacementInfo in parentArtifactInstance.settings.childArtifacts)
         {
+            if (childPlacementInfo.artifactSO == null) continue;
+
             ushort? childOverrideID = null;
             if (childPlacementInfo.overrideVoxel != null)
             {
                 childOverrideID = childPlacementInfo.overrideVoxel.ID;
             }
-            // Если есть переопределение ID, используем его, иначе берем основной материал родителя.
+
             for (int i = 0; i < childPlacementInfo.spawnCount; i++)
             {
-                // Позиция: Позиция родителя + горизонтальное смещение ребенка
-                Vector2 childOffset = Vector2.zero;
-                if (childPlacementInfo.horizontalOffset > 0)
-                {
-                    float angle = childPlacementInfo.useRandomAngle ? (float)random.NextDouble() * 360f : 0f;
-                    childOffset = new Vector2(Mathf.Cos(angle * Mathf.Deg2Rad), Mathf.Sin(angle * Mathf.Deg2Rad)) * childPlacementInfo.horizontalOffset;
-                }
-                Vector2 childArtifactPos = parentArtifactInstance.position + childOffset;
-
-                // Размер: Рассчитывается относительно размера родителя
-                float childSizeMultiplier = Mathf.Lerp(childPlacementInfo.artifactSO.relativeSize.x, childPlacementInfo.artifactSO.relativeSize.y, (float)random.NextDouble());
-                float childFinalSize = finalSize * childSizeMultiplier;
-
-                int childGroundHeight = (int)parentArtifactInstance.groundHeight;
+                Vector2 childArtifactPos = Vector2.zero;
                 float childYOffset = childPlacementInfo.yOffset;
+                
+                // --- ГЛАВНОЕ ИЗМЕНЕНИЕ: ВЫБИРАЕМ ЛОГИКУ РАЗМЕЩЕНИЯ ---
+                switch (childPlacementInfo.placementMode)
+                {
+                    case ChildPlacementMode.StrictlyAbove:
+                    case ChildPlacementMode.StrictlyBelow:
+                        // Для строгого размещения позиция по XZ та же, что у родителя
+                        childArtifactPos = parentArtifactInstance.position;
+                        // Y-смещение остается таким, как задано в настройках
+                        childYOffset = childPlacementInfo.yOffset;
+                        break;
+                    
+                    case ChildPlacementMode.Circular:
+                    default: // Режим Circular будет режимом по умолчанию
+                        int count = childPlacementInfo.spawnCount;
+                        float angleStep = 360f / count;
+                        
+                        float idealAngle = angleStep * i;
+                        if (count == 1) { idealAngle = (float)random.NextDouble() * 360f; }
+                        
+                        float angleChaos = (childPlacementInfo.placementChaos * angleStep) * ((float)random.NextDouble() - 0.5f) * 2f;
+                        float finalAngle = idealAngle + angleChaos;
+                        
+                        float parentRadius = parentArtifactInstance.calculatedSize.x / 2f;
+                        float idealDistance = parentRadius * childPlacementInfo.relativePlacementRadius;
+                        float distanceChaos = (childPlacementInfo.placementChaos * idealDistance) * ((float)random.NextDouble() - 0.5f) * 2f;
+                        float finalDistance = idealDistance + distanceChaos;
 
+                        Vector2 childOffset = new Vector2(Mathf.Cos(finalAngle * Mathf.Deg2Rad), Mathf.Sin(finalAngle * Mathf.Deg2Rad)) * finalDistance;
+                        childArtifactPos = parentArtifactInstance.position + childOffset;
+
+                        float yChaos = (childPlacementInfo.placementChaos * 5f) * ((float)random.NextDouble() - 0.5f) * 2f;
+                        childYOffset = childPlacementInfo.yOffset + yChaos;
+                        break;
+                }
+
+                // --- Общая логика для всех режимов ---
+                float childSizeMultiplier = Mathf.Lerp(childPlacementInfo.artifactSO.relativeSize.x, childPlacementInfo.artifactSO.relativeSize.y, (float)random.NextDouble());
+                float childFinalSize = parentArtifactInstance.calculatedSize.x * childSizeMultiplier;
+                int childGroundHeight = (int)parentArtifactInstance.groundHeight;
+
+                // Вызываем рекурсию с рассчитанными параметрами
                 CreateArtifactAndSpawnChildren(
-                    childPlacementInfo.artifactSO,
-                    childArtifactPos,
-                    childFinalSize,
-                    childGroundHeight,
+                    childPlacementInfo.artifactSO, 
+                    childArtifactPos, 
+                    childFinalSize, 
+                    childGroundHeight, 
                     childYOffset,
-                    rootBiome,
-                    allBiomesInArea,
-                    random,
+                    rootBiome, 
+                    allBiomesInArea, 
+                    random, 
                     artifactListToFill,
                     childOverrideID
                 );

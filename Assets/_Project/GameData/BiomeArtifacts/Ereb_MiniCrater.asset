@@ -16,10 +16,12 @@ MonoBehaviour:
   spawnDensity: 0.45
   spawnChance: 0.5
   relativeSize: {x: 0.2, y: 0.6}
-  relativeHeight: 0.3
+  tiers: 1
   childArtifacts:
   - artifactSO: {fileID: 11400000, guid: afb45f696aac0b24888d9504ab5f76f3, type: 2}
+    overrideVoxel: {fileID: 11400000, guid: 12bcd942bdb363241b5f9be17a6e5c37, type: 2}
     spawnCount: 1
-    yOffset: 5
-    horizontalOffset: 0
-    useRandomAngle: 0
+    placementMode: 1
+    relativePlacementRadius: 0
+    placementChaos: 0
+    yOffset: 10

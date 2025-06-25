@@ -17,9 +17,9 @@ MonoBehaviour:
   chunkUpdateInterval: 0.25
   maxDataJobsPerFrame: 4
   maxMeshJobsPerFrame: 4
-  chunkLingerTime: 5
-  cleanupCheckInterval: 5
-  chunksPerCleanupFrame: 30
+  chunkLingerTime: 1
+  cleanupCheckInterval: 2
+  chunksPerCleanupFrame: 10
   neutralBiome: {fileID: 11400000, guid: cfe7ced1800694a44bd605ba42bbaab0, type: 2}
   voxelTypes:
   - {fileID: 11400000, guid: 12bcd942bdb363241b5f9be17a6e5c37, type: 2}
@@ -29,3 +29,4 @@ MonoBehaviour:
   heightmapNoiseSettings: {fileID: 11400000, guid: 4d4947c4f121b0543bcf4aa373a2f177, type: 2}
   chaosNoiseSettings: {fileID: 11400000, guid: 7373d137cdfcd864ead87e6060cac777, type: 2}
   saturationNoiseSettings: {fileID: 11400000, guid: b8865dafb43d0d841ab2fa90f8d58a41, type: 2}
+  detailNoiseSettings: {fileID: 11400000, guid: a10665586e65b5a4ba0799edc390b2ec, type: 2}

@@ -10,6 +10,10 @@ public struct MeshingJob : IJob
     [ReadOnly] public NativeArray<Vector2Int> voxelUvCoordinates;
     [ReadOnly] public bool hasNeighborPosX, hasNeighborNegX, hasNeighborPosZ, hasNeighborNegZ;
     [ReadOnly] public NativeArray<ushort> neighborVoxelsPosX, neighborVoxelsNegX, neighborVoxelsPosZ, neighborVoxelsNegZ;
+    [ReadOnly] public NativeArray<BiomeInstanceBurst> biomeInstances;
+    [ReadOnly] public BiomeInstanceBurst neutralBiome;
+    [ReadOnly] public FastNoiseLite biomeBlendNoise;
+    [ReadOnly] public Vector3Int chunkPosition;
 
     public NativeList<Vertex> vertices;
     public NativeList<int> triangles;
@@ -45,13 +49,16 @@ public struct MeshingJob : IJob
 
         for (int i = 0; i < 4; i++)
         {
-            Vector3 position = voxelLocalPosition + VoxelData.FaceVertices[vertStartIndex + i];
+            Vector3 vertexPosition = voxelLocalPosition + VoxelData.FaceVertices[vertStartIndex + i];
             Vector2 uv = VoxelData.FaceUVs[i];
+
+            Vector2 worldPos = new Vector2(voxelLocalPosition.x + chunkPosition.x * Chunk.Width, voxelLocalPosition.z + chunkPosition.z * Chunk.Width);
+            Color vertexColor = CalculateBiomeBlendColor(worldPos);
 
             float uv_x = (atlasCoord.x + uv.x) * TextureOffset;
             float uv_y = (atlasCoord.y + uv.y) * TextureOffset;
 
-            vertices.Add(new Vertex(position, new Vector2(uv_x, uv_y)));
+            vertices.Add(new Vertex(vertexPosition, new Vector2(uv_x, uv_y), vertexColor));
         }
 
         triangles.Add(vertexIndex + VoxelData.TriangleIndices[0]);
@@ -60,6 +67,42 @@ public struct MeshingJob : IJob
         triangles.Add(vertexIndex + VoxelData.TriangleIndices[3]);
         triangles.Add(vertexIndex + VoxelData.TriangleIndices[4]);
         triangles.Add(vertexIndex + VoxelData.TriangleIndices[5]);
+    }
+
+    private Color CalculateBiomeBlendColor(Vector2 worldPos)
+    {
+        // Находим два самых влиятельных биома (логика, похожая на ту, что была в GenerationJob)
+        BiomeInstanceBurst biomeA = neutralBiome;
+        BiomeInstanceBurst biomeB = neutralBiome;
+        float influenceA = -1f;
+        float influenceB = -1f;
+
+        for (int i = 0; i < biomeInstances.Length; i++)
+        {
+            float distance = Vector2.Distance(worldPos, biomeInstances[i].position);
+            if (distance < biomeInstances[i].influenceRadius)
+            {
+                float currentInfluence = Mathf.Pow(1f - (distance / biomeInstances[i].influenceRadius), biomeInstances[i].contrast);
+                if (currentInfluence > influenceA)
+                {
+                    influenceB = influenceA;
+                    biomeB = biomeA;
+                    influenceA = currentInfluence;
+                    biomeA = biomeInstances[i];
+                }
+                else if (currentInfluence > influenceB)
+                {
+                    influenceB = currentInfluence;
+                    biomeB = biomeInstances[i];
+                }
+            }
+        }
+
+        // Упаковываем данные в цвет:
+        // R = ID биома A, G = ID биома B, B = Сила смешивания, A = не используется
+        float blendStrength = (influenceB > 0) ? (influenceB / (influenceA + influenceB)) : 0;
+        
+        return new Color(biomeA.surfaceVoxelID / 255f, biomeB.surfaceVoxelID / 255f, blendStrength, 1);
     }
 
     private bool IsVoxelTransparent(int x, int y, int z)

@@ -15,6 +15,14 @@ public class ChunkManager
         this.settings = settings;
         this.worldTransform = worldTransform;
         this.pipeline.OnChunkMeshReady += HandleChunkMeshReady;
+        var uvBuffer = new ComputeBuffer(settings.voxelTypes.Count, sizeof(float) * 2);
+        var uvArray = new Vector2[settings.voxelTypes.Count];
+        foreach(var voxelType in settings.voxelTypes)
+        {
+            if(voxelType != null) uvArray[voxelType.ID] = new Vector2(voxelType.textureAtlasCoord.x, voxelType.textureAtlasCoord.y);
+        }
+        uvBuffer.SetData(uvArray);
+        settings.worldMaterial.SetBuffer("_VoxelUvCoordinates", uvBuffer);
     }
 
     public void Update(Vector3Int playerChunkPosition)

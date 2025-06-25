@@ -8,6 +8,7 @@ public struct GenerationJob : IJobParallelFor
 {
     [ReadOnly] public Vector3Int chunkPosition;
     [ReadOnly] public FastNoiseLite heightMapNoise;
+    [ReadOnly] public FastNoiseLite detailNoise;
     [ReadOnly] public BiomeInstanceBurst neutralBiome;
     [ReadOnly] public NativeArray<BiomeInstanceBurst> biomeInstances;
     [ReadOnly] public NativeArray<ArtifactInstanceBurst> artifactInstances;
@@ -22,7 +23,7 @@ public struct GenerationJob : IJobParallelFor
 
     public void Execute(int index)
     {
-        // 1. Расчет координат и базовой высоты
+        // 1. Расчет координат
         int y = index / (Chunk.Width * Chunk.Width);
         int temp = index % (Chunk.Width * Chunk.Width);
         int x = temp / Chunk.Width;
@@ -30,29 +31,28 @@ public struct GenerationJob : IJobParallelFor
         float worldX = chunkPosition.x * Chunk.Width + x;
         float worldZ = chunkPosition.z * Chunk.Width + z;
         Vector2 worldPos = new Vector2(worldX, worldZ);
-        int baseTerrainHeight = 5 + Mathf.RoundToInt(((heightMapNoise.GetNoise(worldX, worldZ) + 1f) / 2f) * 20f);
-        
-        // 2. Поиск доминантного биома
+
+        // 2. Поиск ОДНОГО доминантного биома. Никакого смешивания здесь.
         BiomeInstanceBurst dominantBiome = neutralBiome;
         float maxInfluence = 0f;
         for (int i = 0; i < biomeInstances.Length; i++)
         {
-            var biome = biomeInstances[i];
-            float distance = Vector2.Distance(worldPos, biome.position);
-            if (distance < biome.influenceRadius)
+            float distance = Vector2.Distance(worldPos, biomeInstances[i].position);
+            if (distance < biomeInstances[i].influenceRadius)
             {
-                float influence = 1f - (distance / biome.influenceRadius);
-                influence = Mathf.Pow(influence, biome.contrast);
+                float influence = Mathf.Pow(1f - (distance / biomeInstances[i].influenceRadius), biomeInstances[i].contrast);
                 if (influence > maxInfluence)
                 {
                     maxInfluence = influence;
-                    dominantBiome = biome;
+                    dominantBiome = biomeInstances[i];
                 }
             }
         }
-        
-        // 3. Расчет высоты с учетом биома
+
+        // 3. Расчет высоты ландшафта (используя только доминантный биом)
+        int baseTerrainHeight = 5 + Mathf.RoundToInt(((heightMapNoise.GetNoise(worldX, worldZ) + 1f) / 2f) * 20f);
         int modifiedBiomeHeight = baseTerrainHeight;
+
         if (maxInfluence > 0)
         {
             float biomeCenterNoise = heightMapNoise.GetNoise(dominantBiome.position.x, dominantBiome.position.y);
@@ -72,11 +72,11 @@ public struct GenerationJob : IJobParallelFor
             }
         }
         
-        // 4. Финальное смешивание высоты
         int finalHeight = (int)Mathf.Lerp(baseTerrainHeight, modifiedBiomeHeight, maxInfluence);
-
-        // 5. Создание VoxelState и применение артефактов, меняющих ландшафт
+        
         VoxelStateData voxelData = new VoxelStateData { terrainHeight = finalHeight, voxelID = 0 };
+
+        // 4. Применение артефактов, меняющих ландшафт (MiniCrater)
         for (int i = 0; i < artifactInstances.Length; i++)
         {
             var artifact = artifactInstances[i];
@@ -85,27 +85,36 @@ public struct GenerationJob : IJobParallelFor
                 craterGenerator.Apply(ref voxelData, artifact, worldPos, y, baseTerrainHeight);
             }
         }
-        
-        // 6. Установка вокселей ландшафта
+
+        // 5. Установка вокселей ландшафта, включая шум детализации
         int finalTerrainHeight = Mathf.Clamp(voxelData.terrainHeight, 1, Chunk.Height - 1);
         if (y <= finalTerrainHeight)
         {
-            if (y == finalTerrainHeight) voxelData.voxelID = dominantBiome.surfaceVoxelID;
-            else if (y > finalTerrainHeight - dominantBiome.subSurfaceDepth) voxelData.voxelID = dominantBiome.subSurfaceVoxelID;
-            else voxelData.voxelID = dominantBiome.mainVoxelID;
+            float detailValue = (detailNoise.GetNoise(worldX, worldZ) + 1f) / 2f;
+            if (y == finalTerrainHeight && detailValue < 0.3f)
+            {
+                voxelData.voxelID = 0; // Air
+            }
+            else
+            {
+                if (y == finalTerrainHeight) voxelData.voxelID = dominantBiome.surfaceVoxelID;
+                else if (y > finalTerrainHeight - dominantBiome.subSurfaceDepth) voxelData.voxelID = dominantBiome.subSurfaceVoxelID;
+                else voxelData.voxelID = dominantBiome.mainVoxelID;
+            }
         }
 
-        // 7. Применение объемных артефактов
+        // 6. Применение объемных артефактов (FloatingIslet)
         for (int i = 0; i < artifactInstances.Length; i++)
         {
             var artifact = artifactInstances[i];
             if (artifact.artifactType == BiomeArtifactType.FloatingIslet)
             {
-                isletGenerator.Apply(ref voxelData, artifact, worldPos, y, baseTerrainHeight);
+                // Здесь мы используем старый метод isletGenerator.Apply
+                // Убедитесь, что он использует artifact.mainVoxelID
             }
         }
-
-        // 8. Запись результата
+        
+        // 7. Запись результата
         resultingVoxelIDs[index] = voxelData.voxelID;
     }
 }

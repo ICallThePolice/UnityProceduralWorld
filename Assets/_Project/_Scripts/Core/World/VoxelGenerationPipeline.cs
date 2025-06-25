@@ -165,6 +165,7 @@ public class VoxelGenerationPipeline
                     size = artifact.calculatedSize,
                     height = artifact.calculatedHeight,
                     yOffset = artifact.yOffset,
+                    tiers = artifact.tiers,
                     groundHeight = artifact.groundHeight,
                     mainVoxelID = artifact.mainVoxelID
                 };
@@ -195,6 +196,13 @@ public class VoxelGenerationPipeline
             saturation.SetFractalGain(settings.saturationNoiseSettings.persistence);
             saturation.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
 
+            var detailNoise = new FastNoiseLite(settings.detailNoiseSettings.seed);
+            detailNoise.SetFrequency(settings.detailNoiseSettings.scale);
+            detailNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
+            detailNoise.SetFractalOctaves(settings.detailNoiseSettings.octaves);
+            detailNoise.SetFractalLacunarity(settings.detailNoiseSettings.lacunarity);
+            detailNoise.SetFractalGain(settings.detailNoiseSettings.persistence);
+
             var neutralBiomeBurst = new BiomeInstanceBurst
             {
                 surfaceVoxelID = settings.neutralBiome.SurfaceVoxel.ID,
@@ -213,6 +221,7 @@ public class VoxelGenerationPipeline
                 neutralBiome = neutralBiomeBurst,
                 biomeInstances = biomeInstancesForJob,
                 artifactInstances = artifactInstancesForJob,
+                detailNoise = detailNoise,
                 resultingVoxelIDs = dataJobVoxelIDs,
 
                 // --- ПЕРЕДАЕМ ЭКЗЕМПЛЯРЫ ГЕНЕРАТОРОВ ---
@@ -272,6 +281,7 @@ public class VoxelGenerationPipeline
                     // 2. В блоке try мы выполняем основную работу: создаем и запускаем задачу
                     var job = new MeshingJob
                     {
+                        chunkPosition = chunkToProcess.chunkPosition,
                         voxelIDs = jobVoxelIDs,
                         voxelUvCoordinates = this.voxelUvCoordinates,
                         hasNeighborPosX = nPosX != null,

@@ -16,8 +16,9 @@ public class BiomeArtifactSO : ScriptableObject
     [Header("Динамические параметры формы (ОТНОСИТЕЛЬНЫЕ)")]
     [Tooltip("ОТНОСИТЕЛЬНЫЙ размер артефакта.")]
     public Vector2 relativeSize = new Vector2(0.1f, 0.25f);
-    [Tooltip("ОТНОСИТЕЛЬНАЯ высота/глубина.")]
-    [Range(0f, 5f)] public float relativeHeight = 0.5f;
+
+    [Tooltip("Количество 'ярусов' для артефактов, которые это поддерживают (например, пирамиды).")]
+    [Range(1, 5)] public int tiers = 1;
 
     [Header("Дочерние артефакты (относительно этого)")]
     public List<ChildArtifactPlacement> childArtifacts;

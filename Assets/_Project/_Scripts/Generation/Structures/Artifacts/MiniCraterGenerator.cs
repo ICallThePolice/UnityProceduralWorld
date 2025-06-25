@@ -1,4 +1,3 @@
-// ФАЙЛ: MiniCraterGenerator.cs
 using UnityEngine;
 
 public struct MiniCraterGenerator : IArtifactGenerator
@@ -10,8 +9,12 @@ public struct MiniCraterGenerator : IArtifactGenerator
 
         if (distToArtifact < artifactRadius)
         {
-            float craterFactor = 1f - (distToArtifact / artifactRadius);
-            voxelData.terrainHeight -= (int)(artifact.height * craterFactor);
+            // --- ИЗМЕНЕНИЕ: Используем плавную кривую вместо линейной ---
+            float influence = 1f - (distToArtifact / artifactRadius);
+            float smoothInfluence = influence * influence * (3f - 2f * influence); // SmoothStep
+
+            // Высота теперь берется напрямую из артефакта (мы изменим ее вычисление в BiomeManager)
+            voxelData.terrainHeight -= (int)(artifact.height * smoothInfluence);
         }
     }
 }

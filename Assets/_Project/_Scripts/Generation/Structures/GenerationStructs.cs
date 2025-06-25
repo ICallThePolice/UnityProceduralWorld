@@ -36,10 +36,13 @@ public struct Vertex
 {
     public Vector3 position;
     public Vector2 uv;
-    public Vertex(Vector3 pos, Vector2 uv)
+    public Color color;
+
+    public Vertex(Vector3 pos, Vector2 uv, Color color)
     {
         this.position = pos;
         this.uv = uv;
+        this.color = color;
     }
 }
 
@@ -52,6 +55,7 @@ public class ArtifactInstance
     public float yOffset;
     public float groundHeight;
     public ushort mainVoxelID;
+    public int tiers;
 }
 
 public class BiomeInstance
@@ -98,6 +102,7 @@ public struct ArtifactInstanceBurst
     public float yOffset;
     public float groundHeight;
     public ushort mainVoxelID;
+    public int tiers;
 }
 
 [System.Serializable]
@@ -109,6 +114,14 @@ public struct BiomeMappingBurst
     public ushort subSurfaceVoxelID;
     public ushort mainVoxelID;
     public int subSurfaceDepth;
+}
+
+public enum ChildPlacementMode 
+{
+    Circular,           // Равномерно по кругу с фактором хаоса
+    StrictlyAbove,      // Строго над центром родителя
+    StrictlyBelow,      // Строго под центром родителя
+    RandomOffset        // Случайное смещение в пределах радиуса (старая логика)
 }
 
 [System.Serializable]
@@ -123,14 +136,17 @@ public class ChildArtifactPlacement
     [Tooltip("Количество, которое нужно попытаться создать.")]
     public int spawnCount = 1;
 
+    [Tooltip("Режим размещения дочерних элементов.")]
+    public ChildPlacementMode placementMode = ChildPlacementMode.Circular;
+
+    [Tooltip("Радиус размещения дочерних элементов, ОТНОСИТЕЛЬНО радиуса родителя. 1.0 = на самом краю.")]
+    [Range(0f, 2f)] public float relativePlacementRadius = 0.8f;
+    
+    [Tooltip("Фактор хаоса (0 до 1). Влияет на угол, дистанцию и высоту размещения.")]
+    [Range(0f, 1f)] public float placementChaos = 0.1f;
+
     [Tooltip("Вертикальное смещение относительно центра родителя.")]
     public float yOffset = 0;
-
-    [Tooltip("Горизонтальное смещение от центра родителя. 0 = точно в центре.")]
-    public float horizontalOffset = 0;
-
-    [Tooltip("Разрешить случайный угол для горизонтального смещения? Если false, смещение будет по одной оси.")]
-    public bool useRandomAngle = true;
 }
 
 /// <summary>

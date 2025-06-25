@@ -9,12 +9,12 @@ MonoBehaviour:
   m_GameObject: {fileID: 0}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 1eeb0e7d83921fd4f963ddd750e7c813, type: 3}
-  m_Name: Ereb_Island
+  m_Script: {fileID: 11500000, guid: 8fe187d52d9b5d04d8feb435f9f7e31d, type: 3}
+  m_Name: DetailNoise
   m_EditorClassIdentifier: 
-  artifactType: 1
-  spawnDensity: 1
-  spawnChance: 1
-  relativeSize: {x: 0.3, y: 0.6}
-  tiers: 1
-  childArtifacts: []
+  scale: 0.3
+  octaves: 3
+  lacunarity: 2
+  persistence: 0.5
+  seed: 6346
+  offset: {x: 0, y: 0}
