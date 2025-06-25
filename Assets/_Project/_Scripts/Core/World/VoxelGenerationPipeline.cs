@@ -94,222 +94,229 @@ public class VoxelGenerationPipeline
     // Обрабатывает ОДИН чанк из очереди данных за вызов
     private void ProcessDataGenerationQueue(Vector3Int playerChunkPos)
     {
-        if (runningDataJobs.Count >= SystemInfo.processorCount || chunksToGenerateData.Count == 0) return;
+        int jobsToStart = Mathf.Min(settings.maxDataJobsPerFrame, SystemInfo.processorCount - runningDataJobs.Count);
 
-        chunksToGenerateData.Sort((a, b) => Vector3Int.Distance(a.chunkPosition, playerChunkPos).CompareTo(Vector3Int.Distance(b.chunkPosition, playerChunkPos)));
-        Chunk chunkToProcess = chunksToGenerateData[0];
-        chunksToGenerateData.RemoveAt(0);
-
-        // 1. Получаем "чистые" ядра биомов из менеджера.
-        List<BiomeInstance> relevantBiomes = biomeManager.GetBiomesInArea(chunkToProcess.chunkPosition, settings.renderDistance);
-        
-        // 2. Объявляем тот самый список 'artifactListToFill', о котором вы спрашивали.
-        // Он создается здесь, пустой, для каждой новой генерации.
-        var allRelevantArtifacts = new List<ArtifactInstance>();
-
-        // 3. Запускаем процесс размещения артефактов, который заполнит наш новый список.
-        foreach (var biome in relevantBiomes)
+        for (int j = 0; j < jobsToStart && chunksToGenerateData.Count > 0; j++)
         {
-            // Детерминированно создаем Random для каждого биома.
-            Vector2Int regionCoords = new Vector2Int(
-                Mathf.FloorToInt(biome.position.x / biomeManager.regionSize),
-                Mathf.FloorToInt(biome.position.y / biomeManager.regionSize)
-            );
-            // 4. Исправляем ошибку с 'worldSettings'. У нас есть доступ к `settings` этого класса.
-            int regionSeed = this.settings.heightmapNoiseSettings.seed + regionCoords.x * 16777619 + regionCoords.y * 3145739;
-            var random = new System.Random(regionSeed);
+            chunksToGenerateData.Sort((a, b) => Vector3Int.Distance(a.chunkPosition, playerChunkPos).CompareTo(Vector3Int.Distance(b.chunkPosition, playerChunkPos)));
+            Chunk chunkToProcess = chunksToGenerateData[0];
+            chunksToGenerateData.RemoveAt(0);
 
-            // 5. Вызываем наш новый публичный метод и передаем ему список для заполнения.
-            biomeManager.PlaceArtifacts(biome, random, relevantBiomes, allRelevantArtifacts);
+            // 1. Получаем "чистые" ядра биомов из менеджера.
+            List<BiomeInstance> relevantBiomes = biomeManager.GetBiomesInArea(chunkToProcess.chunkPosition, settings.renderDistance);
 
-            biomeManager.lastGeneratedArtifacts = allRelevantArtifacts;
-        }
+            // 2. Объявляем тот самый список 'artifactListToFill', о котором вы спрашивали.
+            // Он создается здесь, пустой, для каждой новой генерации.
+            var allRelevantArtifacts = new List<ArtifactInstance>();
 
-        // 6. Готовим данные для Job, используя заполненный список allRelevantArtifacts.
-        // Этот код теперь тоже будет работать правильно.
-        var biomeInstancesForJob = new NativeArray<BiomeInstanceBurst>(relevantBiomes.Count, Allocator.Persistent);
-        var artifactInstancesForJob = new NativeArray<ArtifactInstanceBurst>(allRelevantArtifacts.Count, Allocator.Persistent);
-
-        for (int i = 0; i < relevantBiomes.Count; i++)
-        {
-            var instance = relevantBiomes[i];
-            biomeInstancesForJob[i] = new BiomeInstanceBurst
+            // 3. Запускаем процесс размещения артефактов, который заполнит наш новый список.
+            foreach (var biome in relevantBiomes)
             {
-                position = instance.position,
-                influenceRadius = instance.calculatedRadius,
-                aggressiveness = instance.calculatedAggressiveness,
-                tiers = instance.calculatedTiers,
-                contrast = instance.calculatedContrast,
-                isInverted = instance.isInverted,
-                biomeHighestPoint = instance.biomeHighestPoint,
+                // Детерминированно создаем Random для каждого биома.
+                Vector2Int regionCoords = new Vector2Int(
+                    Mathf.FloorToInt(biome.position.x / biomeManager.regionSize),
+                    Mathf.FloorToInt(biome.position.y / biomeManager.regionSize)
+                );
+                // 4. Исправляем ошибку с 'worldSettings'. У нас есть доступ к `settings` этого класса.
+                int regionSeed = this.settings.heightmapNoiseSettings.seed + regionCoords.x * 16777619 + regionCoords.y * 3145739;
+                var random = new System.Random(regionSeed);
 
-                surfaceVoxelID = instance.settings.biome.SurfaceVoxel.ID,
-                subSurfaceVoxelID = instance.settings.biome.SubSurfaceVoxel.ID,
-                mainVoxelID = instance.settings.biome.MainVoxel.ID,
-                subSurfaceDepth = instance.settings.biome.SubSurfaceDepth,
-                terrainModificationType = instance.settings.biome.terrainModificationType,
-                verticalDisplacementScale = instance.settings.biome.verticalDisplacementScale,
-                tierRadii = instance.calculatedTierRadii
-            };
-        }
+                // 5. Вызываем наш новый публичный метод и передаем ему список для заполнения.
+                biomeManager.PlaceArtifacts(biome, random, relevantBiomes, allRelevantArtifacts);
 
-        for (int i = 0; i < allRelevantArtifacts.Count; i++)
-        {
-            var artifact = allRelevantArtifacts[i];
-            artifactInstancesForJob[i] = new ArtifactInstanceBurst
+                biomeManager.lastGeneratedArtifacts = allRelevantArtifacts;
+            }
+
+            // 6. Готовим данные для Job, используя заполненный список allRelevantArtifacts.
+            // Этот код теперь тоже будет работать правильно.
+            var biomeInstancesForJob = new NativeArray<BiomeInstanceBurst>(relevantBiomes.Count, Allocator.Persistent);
+            var artifactInstancesForJob = new NativeArray<ArtifactInstanceBurst>(allRelevantArtifacts.Count, Allocator.Persistent);
+
+            for (int i = 0; i < relevantBiomes.Count; i++)
             {
-                position = artifact.position,
-                artifactType = artifact.settings.artifactType,
-                size = artifact.calculatedSize,
-                height = artifact.calculatedHeight,
-                yOffset = artifact.yOffset,
-                groundHeight = artifact.groundHeight
+                var instance = relevantBiomes[i];
+                biomeInstancesForJob[i] = new BiomeInstanceBurst
+                {
+                    position = instance.position,
+                    influenceRadius = instance.calculatedRadius,
+                    aggressiveness = instance.calculatedAggressiveness,
+                    tiers = instance.calculatedTiers,
+                    contrast = instance.calculatedContrast,
+                    isInverted = instance.isInverted,
+                    biomeHighestPoint = instance.biomeHighestPoint,
+
+                    surfaceVoxelID = instance.settings.biome.SurfaceVoxel.ID,
+                    subSurfaceVoxelID = instance.settings.biome.SubSurfaceVoxel.ID,
+                    mainVoxelID = instance.settings.biome.MainVoxel.ID,
+                    subSurfaceDepth = instance.settings.biome.SubSurfaceDepth,
+                    terrainModificationType = instance.settings.biome.terrainModificationType,
+                    verticalDisplacementScale = instance.settings.biome.verticalDisplacementScale,
+                    tierRadii = instance.calculatedTierRadii
+                };
+            }
+
+            for (int i = 0; i < allRelevantArtifacts.Count; i++)
+            {
+                var artifact = allRelevantArtifacts[i];
+                artifactInstancesForJob[i] = new ArtifactInstanceBurst
+                {
+                    position = artifact.position,
+                    artifactType = artifact.settings.artifactType,
+                    size = artifact.calculatedSize,
+                    height = artifact.calculatedHeight,
+                    yOffset = artifact.yOffset,
+                    groundHeight = artifact.groundHeight
+                };
+            }
+
+            var dataJobVoxelIDs = new NativeArray<ushort>(Chunk.Width * Chunk.Height * Chunk.Width, Allocator.Persistent);
+
+            var heightNoise = new FastNoiseLite(settings.heightmapNoiseSettings.seed);
+            heightNoise.SetFrequency(settings.heightmapNoiseSettings.scale);
+            heightNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
+            heightNoise.SetFractalOctaves(settings.heightmapNoiseSettings.octaves);
+            heightNoise.SetFractalLacunarity(settings.heightmapNoiseSettings.lacunarity);
+            heightNoise.SetFractalGain(settings.heightmapNoiseSettings.persistence);
+
+            var chaos = new FastNoiseLite(settings.chaosNoiseSettings.seed);
+            chaos.SetFrequency(settings.chaosNoiseSettings.scale);
+            chaos.SetFractalType(FastNoiseLite.FractalType.FBm);
+            chaos.SetFractalOctaves(settings.chaosNoiseSettings.octaves);
+            chaos.SetFractalLacunarity(settings.chaosNoiseSettings.lacunarity);
+            chaos.SetFractalGain(settings.chaosNoiseSettings.persistence);
+            chaos.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+
+            var saturation = new FastNoiseLite(settings.saturationNoiseSettings.seed);
+            saturation.SetFrequency(settings.saturationNoiseSettings.scale);
+            saturation.SetFractalType(FastNoiseLite.FractalType.FBm);
+            saturation.SetFractalOctaves(settings.saturationNoiseSettings.octaves);
+            saturation.SetFractalLacunarity(settings.saturationNoiseSettings.lacunarity);
+            saturation.SetFractalGain(settings.saturationNoiseSettings.persistence);
+            saturation.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+
+            var neutralBiomeBurst = new BiomeInstanceBurst
+            {
+                surfaceVoxelID = settings.neutralBiome.SurfaceVoxel.ID,
+                subSurfaceVoxelID = settings.neutralBiome.SubSurfaceVoxel.ID,
+                mainVoxelID = settings.neutralBiome.MainVoxel.ID,
+                subSurfaceDepth = settings.neutralBiome.SubSurfaceDepth,
+                terrainModificationType = settings.neutralBiome.terrainModificationType,
+                verticalDisplacementScale = settings.neutralBiome.verticalDisplacementScale
             };
+
+            // Создание и запуск Job'а
+            var job = new GenerationJob
+            {
+                chunkPosition = chunkToProcess.chunkPosition,
+                heightMapNoise = heightNoise,
+                neutralBiome = neutralBiomeBurst,
+                biomeInstances = biomeInstancesForJob,
+                artifactInstances = artifactInstancesForJob,
+                resultingVoxelIDs = dataJobVoxelIDs,
+
+                // --- ПЕРЕДАЕМ ЭКЗЕМПЛЯРЫ ГЕНЕРАТОРОВ ---
+                additiveGenerator = this.additiveGenerator,
+                subtractiveGenerator = this.subtractiveGenerator,
+                replaceGenerator = this.replaceGenerator,
+                craterGenerator = this.craterGenerator,
+                isletGenerator = this.isletGenerator
+            };
+
+            var handle = job.Schedule(dataJobVoxelIDs.Length, 64);
+            runningDataJobs.Add(new AsyncChunkDataRequest
+            {
+                JobHandle = handle,
+                TargetChunk = chunkToProcess,
+                VoxelIDs = dataJobVoxelIDs,
+                BiomeInstances = biomeInstancesForJob,
+                ArtifactInstances = artifactInstancesForJob
+            });
         }
-
-        var dataJobVoxelIDs = new NativeArray<ushort>(Chunk.Width * Chunk.Height * Chunk.Width, Allocator.Persistent);
-
-        var heightNoise = new FastNoiseLite(settings.heightmapNoiseSettings.seed);
-        heightNoise.SetFrequency(settings.heightmapNoiseSettings.scale);
-        heightNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
-        heightNoise.SetFractalOctaves(settings.heightmapNoiseSettings.octaves);
-        heightNoise.SetFractalLacunarity(settings.heightmapNoiseSettings.lacunarity);
-        heightNoise.SetFractalGain(settings.heightmapNoiseSettings.persistence);
-
-        var chaos = new FastNoiseLite(settings.chaosNoiseSettings.seed);
-        chaos.SetFrequency(settings.chaosNoiseSettings.scale);
-        chaos.SetFractalType(FastNoiseLite.FractalType.FBm);
-        chaos.SetFractalOctaves(settings.chaosNoiseSettings.octaves);
-        chaos.SetFractalLacunarity(settings.chaosNoiseSettings.lacunarity);
-        chaos.SetFractalGain(settings.chaosNoiseSettings.persistence);
-        chaos.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-
-        var saturation = new FastNoiseLite(settings.saturationNoiseSettings.seed);
-        saturation.SetFrequency(settings.saturationNoiseSettings.scale);
-        saturation.SetFractalType(FastNoiseLite.FractalType.FBm);
-        saturation.SetFractalOctaves(settings.saturationNoiseSettings.octaves);
-        saturation.SetFractalLacunarity(settings.saturationNoiseSettings.lacunarity);
-        saturation.SetFractalGain(settings.saturationNoiseSettings.persistence);
-        saturation.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-
-        var neutralBiomeBurst = new BiomeInstanceBurst
-        {
-            surfaceVoxelID = settings.neutralBiome.SurfaceVoxel.ID,
-            subSurfaceVoxelID = settings.neutralBiome.SubSurfaceVoxel.ID,
-            mainVoxelID = settings.neutralBiome.MainVoxel.ID,
-            subSurfaceDepth = settings.neutralBiome.SubSurfaceDepth,
-            terrainModificationType = settings.neutralBiome.terrainModificationType,
-            verticalDisplacementScale = settings.neutralBiome.verticalDisplacementScale
-        };
-
-        // Создание и запуск Job'а
-        var job = new GenerationJob
-        {
-            chunkPosition = chunkToProcess.chunkPosition,
-            heightMapNoise = heightNoise,
-            neutralBiome = neutralBiomeBurst,
-            biomeInstances = biomeInstancesForJob,
-            artifactInstances = artifactInstancesForJob,
-            resultingVoxelIDs = dataJobVoxelIDs,
-
-            // --- ПЕРЕДАЕМ ЭКЗЕМПЛЯРЫ ГЕНЕРАТОРОВ ---
-            additiveGenerator = this.additiveGenerator,
-            subtractiveGenerator = this.subtractiveGenerator,
-            replaceGenerator = this.replaceGenerator,
-            craterGenerator = this.craterGenerator,
-            isletGenerator = this.isletGenerator
-        };
-
-        var handle = job.Schedule(dataJobVoxelIDs.Length, 64);
-        runningDataJobs.Add(new AsyncChunkDataRequest
-        {
-            JobHandle = handle,
-            TargetChunk = chunkToProcess,
-            VoxelIDs = dataJobVoxelIDs,
-            BiomeInstances = biomeInstancesForJob,
-            ArtifactInstances = artifactInstancesForJob
-        });
     }
 
     // Главный цикл обработки очереди на создание меша
     private void ProcessMeshGenerationQueue(Vector3Int playerChunkPos, Func<Vector3Int, Chunk> getChunkCallback)
     {
-        if (runningMeshJobs.Count >= SystemInfo.processorCount || chunksToGenerateMesh.Count == 0) return;
+        int jobsToStart = Mathf.Min(settings.maxMeshJobsPerFrame, SystemInfo.processorCount - runningMeshJobs.Count);
 
-        chunksToGenerateMesh.Sort((a, b) => Vector3Int.Distance(a.chunkPosition, playerChunkPos).CompareTo(Vector3Int.Distance(b.chunkPosition, playerChunkPos)));
-        Chunk chunkToProcess = chunksToGenerateMesh[0];
-
-        Chunk nPosX = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(1, 0, 0));
-        Chunk nNegX = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(-1, 0, 0));
-        Chunk nPosZ = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(0, 0, 1));
-        Chunk nNegZ = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(0, 0, -1));
-
-        bool allNeighborsReady = (nPosX == null || nPosX.isDataGenerated) && (nNegX == null || nNegX.isDataGenerated) && (nPosZ == null || nPosZ.isDataGenerated) && (nNegZ == null || nNegZ.isDataGenerated);
-
-        if (allNeighborsReady)
+        for (int j = 0; j < jobsToStart && chunksToGenerateMesh.Count > 0; j++)
         {
-            chunksToGenerateMesh.RemoveAt(0);
 
-            // 1. Выделяем всю необходимую память ПЕРЕД блоком try
-            var jobVoxelIDs = new NativeArray<ushort>(chunkToProcess.GetAllVoxelIDs(), Allocator.Persistent);
-            var neighborDataPosX = GetNeighborData(nPosX);
-            var neighborDataNegX = GetNeighborData(nNegX);
-            var neighborDataPosZ = GetNeighborData(nPosZ);
-            var neighborDataNegZ = GetNeighborData(nNegZ);
-            var vertices = new NativeList<Vertex>(Allocator.Persistent);
-            var triangles = new NativeList<int>(Allocator.Persistent);
+            chunksToGenerateMesh.Sort((a, b) => Vector3Int.Distance(a.chunkPosition, playerChunkPos).CompareTo(Vector3Int.Distance(b.chunkPosition, playerChunkPos)));
+            Chunk chunkToProcess = chunksToGenerateMesh[0];
 
-            bool success = false;
-            try
+            Chunk nPosX = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(1, 0, 0));
+            Chunk nNegX = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(-1, 0, 0));
+            Chunk nPosZ = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(0, 0, 1));
+            Chunk nNegZ = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(0, 0, -1));
+
+            bool allNeighborsReady = (nPosX == null || nPosX.isDataGenerated) && (nNegX == null || nNegX.isDataGenerated) && (nPosZ == null || nPosZ.isDataGenerated) && (nNegZ == null || nNegZ.isDataGenerated);
+
+            if (allNeighborsReady)
             {
-                // 2. В блоке try мы выполняем основную работу: создаем и запускаем задачу
-                var job = new MeshingJob
-                {
-                    voxelIDs = jobVoxelIDs,
-                    voxelUvCoordinates = this.voxelUvCoordinates,
-                    hasNeighborPosX = nPosX != null,
-                    hasNeighborNegX = nNegX != null,
-                    hasNeighborPosZ = nPosZ != null,
-                    hasNeighborNegZ = nNegZ != null,
-                    neighborVoxelsPosX = neighborDataPosX,
-                    neighborVoxelsNegX = neighborDataNegX,
-                    neighborVoxelsPosZ = neighborDataPosZ,
-                    neighborVoxelsNegZ = neighborDataNegZ,
-                    vertices = vertices,
-                    triangles = triangles
-                };
+                chunksToGenerateMesh.RemoveAt(0);
 
-                var handle = job.Schedule();
-                runningMeshJobs.Add(new AsyncChunkMeshRequest
-                {
-                    JobHandle = handle,
-                    TargetChunk = chunkToProcess,
-                    VoxelIDs = jobVoxelIDs,
-                    NeighborPosX = neighborDataPosX,
-                    NeighborNegX = neighborDataNegX,
-                    NeighborPosZ = neighborDataPosZ,
-                    NeighborNegZ = neighborDataNegZ,
-                    Vertices = vertices,
-                    Triangles = triangles
-                });
+                // 1. Выделяем всю необходимую память ПЕРЕД блоком try
+                var jobVoxelIDs = new NativeArray<ushort>(chunkToProcess.GetAllVoxelIDs(), Allocator.Persistent);
+                var neighborDataPosX = GetNeighborData(nPosX);
+                var neighborDataNegX = GetNeighborData(nNegX);
+                var neighborDataPosZ = GetNeighborData(nPosZ);
+                var neighborDataNegZ = GetNeighborData(nNegZ);
+                var vertices = new NativeList<Vertex>(Allocator.Persistent);
+                var triangles = new NativeList<int>(Allocator.Persistent);
 
-                // 3. Только если все прошло успешно, помечаем операцию как успешную
-                success = true;
-            }
-            finally
-            {
-                // 4. Блок finally выполнится В ЛЮБОМ СЛУЧАЕ.
-                // Если операция не была успешной, значит, произошла ошибка,
-                // и мы должны немедленно очистить всю память, которую выделили.
-                if (!success)
+                bool success = false;
+                try
                 {
-                    if (jobVoxelIDs.IsCreated) jobVoxelIDs.Dispose();
-                    if (neighborDataPosX.IsCreated) neighborDataPosX.Dispose();
-                    if (neighborDataNegX.IsCreated) neighborDataNegX.Dispose();
-                    if (neighborDataPosZ.IsCreated) neighborDataPosZ.Dispose();
-                    if (neighborDataNegZ.IsCreated) neighborDataNegZ.Dispose();
-                    if (vertices.IsCreated) vertices.Dispose();
-                    if (triangles.IsCreated) triangles.Dispose();
+                    // 2. В блоке try мы выполняем основную работу: создаем и запускаем задачу
+                    var job = new MeshingJob
+                    {
+                        voxelIDs = jobVoxelIDs,
+                        voxelUvCoordinates = this.voxelUvCoordinates,
+                        hasNeighborPosX = nPosX != null,
+                        hasNeighborNegX = nNegX != null,
+                        hasNeighborPosZ = nPosZ != null,
+                        hasNeighborNegZ = nNegZ != null,
+                        neighborVoxelsPosX = neighborDataPosX,
+                        neighborVoxelsNegX = neighborDataNegX,
+                        neighborVoxelsPosZ = neighborDataPosZ,
+                        neighborVoxelsNegZ = neighborDataNegZ,
+                        vertices = vertices,
+                        triangles = triangles
+                    };
+
+                    var handle = job.Schedule();
+                    runningMeshJobs.Add(new AsyncChunkMeshRequest
+                    {
+                        JobHandle = handle,
+                        TargetChunk = chunkToProcess,
+                        VoxelIDs = jobVoxelIDs,
+                        NeighborPosX = neighborDataPosX,
+                        NeighborNegX = neighborDataNegX,
+                        NeighborPosZ = neighborDataPosZ,
+                        NeighborNegZ = neighborDataNegZ,
+                        Vertices = vertices,
+                        Triangles = triangles
+                    });
+
+                    // 3. Только если все прошло успешно, помечаем операцию как успешную
+                    success = true;
+                }
+                finally
+                {
+                    // 4. Блок finally выполнится В ЛЮБОМ СЛУЧАЕ.
+                    // Если операция не была успешной, значит, произошла ошибка,
+                    // и мы должны немедленно очистить всю память, которую выделили.
+                    if (!success)
+                    {
+                        if (jobVoxelIDs.IsCreated) jobVoxelIDs.Dispose();
+                        if (neighborDataPosX.IsCreated) neighborDataPosX.Dispose();
+                        if (neighborDataNegX.IsCreated) neighborDataNegX.Dispose();
+                        if (neighborDataPosZ.IsCreated) neighborDataPosZ.Dispose();
+                        if (neighborDataNegZ.IsCreated) neighborDataNegZ.Dispose();
+                        if (vertices.IsCreated) vertices.Dispose();
+                        if (triangles.IsCreated) triangles.Dispose();
+                    }
                 }
             }
         }

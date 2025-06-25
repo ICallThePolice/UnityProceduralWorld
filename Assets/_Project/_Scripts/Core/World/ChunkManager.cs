@@ -29,25 +29,35 @@ public class ChunkManager
             }
         }
 
-        // 2. Находим чанки на удаление (те, что есть, но быть не должны).
         List<Vector3Int> chunksToUnload = new List<Vector3Int>();
-        foreach (var chunkPos in activeChunks.Keys)
+
+        // 2. Находим чанки на удаление и обновляем таймер у активных.
+        foreach (var chunk in activeChunks.Values)
         {
-            if (!desiredChunks.Contains(chunkPos))
+            if (desiredChunks.Contains(chunk.chunkPosition))
             {
-                chunksToUnload.Add(chunkPos);
+                chunk.lastActiveTime = Time.time; // Обновляем таймер, чанк все еще нужен
+            }
+            else
+            {
+                // Если чанк больше не в зоне видимости и его время жизни истекло
+                if (Time.time - chunk.lastActiveTime > settings.chunkLingerTime)
+                {
+                    chunksToUnload.Add(chunk.chunkPosition);
+                }
             }
         }
-
-        // 3. Немедленно выгружаем их.
+        
+        // 3. Выгружаем "устаревшие" чанки.
         foreach (var chunkPos in chunksToUnload)
         {
-            // Отправляем простую, неблокирующую команду отмены в конвейер.
+            // Отправляем команду отмены в конвейер.
+            // Это предотвратит запуск новых Job'ов для этого чанка.
             pipeline.CancelChunkGeneration(chunkPos);
             
             if (activeChunks.TryGetValue(chunkPos, out Chunk chunk))
             {
-                if (chunk.gameObject != null) GameObject.Destroy(chunk.gameObject);
+                chunk.Dispose(); // Используем наш новый метод для полной очистки
                 activeChunks.Remove(chunkPos);
             }
         }
@@ -63,6 +73,7 @@ public class ChunkManager
             }
         }
     }
+
     
     public void OnChunkDataReady(Chunk chunk)
     {
@@ -75,9 +86,11 @@ public class ChunkManager
     /// </summary>
     private void HandleChunkMeshReady(Chunk chunk, Mesh meshData)
     {
-
+        // Проверка на случай, если чанк был выгружен пока генерировался меш
         if (!activeChunks.ContainsKey(chunk.chunkPosition))
         {
+            // Если чанка уже нет в активных, просто уничтожаем пришедший меш
+            if (meshData != null) GameObject.Destroy(meshData);
             return;
         }
 
@@ -93,11 +106,7 @@ public class ChunkManager
             chunk.gameObject.AddComponent<MeshRenderer>().sharedMaterial = settings.worldMaterial;
             chunk.gameObject.AddComponent<MeshCollider>();
         }
-
-        var meshFilter = chunk.gameObject.GetComponent<MeshFilter>();
-        var meshCollider = chunk.gameObject.GetComponent<MeshCollider>();
-
-        // Применяем готовый меш
+        
         chunk.gameObject.GetComponent<MeshFilter>().sharedMesh = meshData;
         chunk.gameObject.GetComponent<MeshCollider>().sharedMesh = meshData;
 

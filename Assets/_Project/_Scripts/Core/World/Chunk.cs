@@ -1,7 +1,7 @@
 // --- Файл Chunk.cs ---
 using UnityEngine;
-using System; // Необходимо для Buffer
-using System.Linq; // Необходимо для .Cast<>
+using System;
+using System.Linq;
 
 public class Chunk
 {
@@ -11,14 +11,14 @@ public class Chunk
     public readonly Vector3Int chunkPosition;
     public GameObject gameObject;
 
-    public Mesh meshData;
+    public Mesh meshData; // Ссылка на меш, которую нужно будет очищать
 
     private readonly ushort[,,] voxelIDs;
 
     public bool isDataGenerated = false;
     public bool isMeshGenerated = false;
     public bool isModifiedByPlayer = false;
-    public float lastActiveTime;
+    public float lastActiveTime; // Этот таймер мы будем использовать для оптимизации
 
     public Chunk(Vector3Int position)
     {
@@ -27,6 +27,23 @@ public class Chunk
         this.lastActiveTime = Time.time;
     }
     
+    // --- НОВЫЙ МЕТОД ---
+    /// <summary>
+    /// Освобождает все ресурсы, связанные с чанком.
+    /// </summary>
+    public void Dispose()
+    {
+        if (gameObject != null)
+        {
+            GameObject.Destroy(gameObject);
+        }
+        if (meshData != null)
+        {
+            // Это самая важная строка для исправления утечки памяти!
+            GameObject.Destroy(meshData);
+        }
+    }
+
     public ushort GetVoxelID(int x, int y, int z)
     {
         return voxelIDs[x, y, z];

@@ -14,9 +14,11 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   worldMaterial: {fileID: 2100000, guid: 824b987b56090b3459bf1079ebabfad9, type: 2}
   renderDistance: 4
-  chunkUpdateInterval: 0.5
-  chunkLingerTime: 1
-  cleanupCheckInterval: 1
+  chunkUpdateInterval: 0.25
+  maxDataJobsPerFrame: 4
+  maxMeshJobsPerFrame: 4
+  chunkLingerTime: 5
+  cleanupCheckInterval: 5
   chunksPerCleanupFrame: 30
   neutralBiome: {fileID: 11400000, guid: cfe7ced1800694a44bd605ba42bbaab0, type: 2}
   voxelTypes:

@@ -6,11 +6,12 @@ public class WorldController : MonoBehaviour
     public static WorldController Instance { get; private set; }
 
     [Tooltip("Перетащите сюда ассет со всеми настройками мира")]
-    public WorldSettingsSO worldSettings;
-    public Transform player;
+    public WorldSettingsSO worldSettings; // Ассет с настройками мира, который содержит все необходимые параметры
+    public Transform player; // Ссылка на игрока, чтобы знать, где он находится в мире
 
-    private ChunkManager chunkManager;
-    private VoxelGenerationPipeline generationPipeline;
+    private ChunkManager chunkManager; // Менеджер чанков, который управляет их созданием и удалением
+    private VoxelGenerationPipeline generationPipeline; // Конвейер генерации вокселей
+    private float chunkUpdateTimer; // Таймер для обновления чанков
 
     private void Awake()
     {
@@ -18,7 +19,8 @@ public class WorldController : MonoBehaviour
         Instance = this;
 
         // 2. Проверяем его собственные зависимости
-        if (worldSettings == null || player == null) {
+        if (worldSettings == null || player == null)
+        {
             this.enabled = false;
             return;
         }
@@ -29,11 +31,11 @@ public class WorldController : MonoBehaviour
             this.enabled = false;
             return;
         }
-        
+
         // 4. Явно инициализируем BiomeManager, передавая ему нужные настройки.
         // Теперь BiomeManager не ищет WorldController, а наоборот.
         BiomeManager.Instance.Initialize(worldSettings);
-        
+
         // 5. Создаем остальные компоненты, которые зависят от настроенных менеджеров
         generationPipeline = new VoxelGenerationPipeline(worldSettings, BiomeManager.Instance);
         chunkManager = new ChunkManager(generationPipeline, worldSettings, this.transform);
@@ -42,11 +44,21 @@ public class WorldController : MonoBehaviour
 
     private void Update()
     {
-        var playerChunkPosition = GetChunkPositionFromWorldPos(player.position);
+        // Обновляем таймер
+        chunkUpdateTimer -= Time.deltaTime;
+
+        // Логика управления чанками (загрузка/выгрузка) теперь выполняется по таймеру
+        if (chunkUpdateTimer <= 0f)
+        {
+            chunkUpdateTimer = worldSettings.chunkUpdateInterval; // Сбрасываем таймер
+            var playerChunkPosition = GetChunkPositionFromWorldPos(player.position);
+            chunkManager.Update(playerChunkPosition);
+        }
         
-        // Вызываем правильные методы
-        chunkManager.Update(playerChunkPosition);
-        generationPipeline.ProcessQueues(playerChunkPosition, chunkManager.GetChunk);
+        // А вот обработка очередей и завершенных задач должна выполняться каждый кадр,
+        // чтобы мир генерировался плавно и без рывков.
+        var currentChunkPos = GetChunkPositionFromWorldPos(player.position); // Позиция нужна для сортировки
+        generationPipeline.ProcessQueues(currentChunkPos, chunkManager.GetChunk);
         generationPipeline.CheckCompletedJobs(chunkManager.OnChunkDataReady);
     }
 
