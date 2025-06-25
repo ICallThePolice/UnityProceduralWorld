@@ -35,13 +35,11 @@ public interface IArtifactGenerator
 public struct Vertex
 {
     public Vector3 position;
-    public Vector2 uv;
-    public Color color;
+    public Color32 color;
 
-    public Vertex(Vector3 pos, Vector2 uv, Color color)
+    public Vertex(Vector3 pos, Color32 color)
     {
         this.position = pos;
-        this.uv = uv;
         this.color = color;
     }
 }
@@ -76,20 +74,11 @@ public class BiomeInstance
 [System.Serializable]
 public struct BiomeInstanceBurst
 {
+    public ushort biomeID;
     public Vector2 position;
     public float influenceRadius;
-    public float aggressiveness;
-    public int tiers;
     public float contrast;
-    public bool isInverted;
-    public float biomeHighestPoint;
-    public ushort surfaceVoxelID;
-    public ushort subSurfaceVoxelID;
-    public ushort mainVoxelID;
-    public int subSurfaceDepth;
-    public TerrainModifier terrainModificationType;
-    public float verticalDisplacementScale;
-    public Vector3 tierRadii;
+    public ushort blockID;
 }
 
 [System.Serializable]

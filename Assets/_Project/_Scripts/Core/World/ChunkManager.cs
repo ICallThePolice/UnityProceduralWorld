@@ -8,7 +8,6 @@ public class ChunkManager
     private readonly VoxelGenerationPipeline pipeline;
     private readonly WorldSettingsSO settings;
     private readonly Transform worldTransform;
-    private ComputeBuffer voxelUvCoordinatesBuffer; // Добавляем поле для хранения буфера
 
     public ChunkManager(VoxelGenerationPipeline pipeline, WorldSettingsSO settings, Transform worldTransform)
     {
@@ -17,37 +16,6 @@ public class ChunkManager
         this.worldTransform = worldTransform;
         this.pipeline.OnChunkMeshReady += HandleChunkMeshReady;
 
-        // --- ИСПРАВЛЕННАЯ ЛОГИКА ---
-        if (settings.worldMaterial != null && settings.voxelTypes.Count > 0)
-        {
-            // 1. Находим максимальный ID
-            ushort maxId = 0;
-            foreach (var voxelType in settings.voxelTypes)
-            {
-                if (voxelType != null && voxelType.ID > maxId)
-                {
-                    maxId = voxelType.ID;
-                }
-            }
-
-            // 2. Создаем массив нужного размера
-            Vector2[] uvArray = new Vector2[maxId + 1];
-
-            // 3. Заполняем массив
-            foreach (var voxelType in settings.voxelTypes)
-            {
-                if (voxelType != null)
-                {
-                    // Делим на размер атласа, чтобы получить координаты в диапазоне [0,1]
-                    uvArray[voxelType.ID] = new Vector2(voxelType.textureAtlasCoord.x / 2f, voxelType.textureAtlasCoord.y / 2f);
-                }
-            }
-
-            // 4. Создаем и передаем буфер в шейдер
-            voxelUvCoordinatesBuffer = new ComputeBuffer(uvArray.Length, sizeof(float) * 2);
-            voxelUvCoordinatesBuffer.SetData(uvArray);
-            settings.worldMaterial.SetBuffer("_VoxelUvCoordinates", voxelUvCoordinatesBuffer);
-        }
     }
 
     public void Update(Vector3Int playerChunkPosition)

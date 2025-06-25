@@ -1,4 +1,4 @@
-// ФАЙЛ: ReplaceBiomeGenerator.cs
+#if false// ФАЙЛ: ReplaceBiomeGenerator.cs
 using UnityEngine;
 
 public struct ReplaceBiomeGenerator : IBiomeTerrainGenerator
@@ -24,3 +24,4 @@ public struct ReplaceBiomeGenerator : IBiomeTerrainGenerator
         return Mathf.Ceil(normDist / stepSize) * stepSize;
     }
 }
+#endif

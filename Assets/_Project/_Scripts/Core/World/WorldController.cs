@@ -51,22 +51,22 @@ public class WorldController : MonoBehaviour
         {
             ushort maxId = 0;
             foreach (var v in worldSettings.voxelTypes) if (v != null && v.ID > maxId) maxId = v.ID;
-            
+
             Vector2[] uvArray = new Vector2[maxId + 1];
-            Vector2 atlasSize = new Vector2(2, 2); // Укажите здесь реальный размер вашего атласа
+            Vector2 atlasSize = new Vector2(2, 2); // Укажите здесь реальный размер вашего атласа (например, 2x2 текстуры)
 
             foreach (var v in worldSettings.voxelTypes)
             {
                 if (v != null)
                 {
-                    // Сразу считаем правильные UV для атласа
-                    uvArray[v.ID] = new Vector2(v.textureAtlasCoord.x / atlasSize.x, v.textureAtlasCoord.y / atlasSize.y);
+                    // Передаем только координаты тайла, без деления на размер атласа
+                    uvArray[v.ID] = new Vector2(v.textureAtlasCoord.x, v.textureAtlasCoord.y);
                 }
             }
-            
+
             voxelUvCoordinatesBuffer = new ComputeBuffer(uvArray.Length, sizeof(float) * 2);
             voxelUvCoordinatesBuffer.SetData(uvArray);
-            
+
             worldSettings.worldMaterial.SetBuffer("_VoxelUvCoordinates", voxelUvCoordinatesBuffer);
             worldSettings.worldMaterial.SetVector("_AtlasSizeInv", new Vector4(1.0f / atlasSize.x, 1.0f / atlasSize.y, 0, 0));
         }
@@ -103,7 +103,7 @@ public class WorldController : MonoBehaviour
         {
             chunkManager.Dispose();
         }
-        
+
         voxelUvCoordinatesBuffer?.Release();
     }
 

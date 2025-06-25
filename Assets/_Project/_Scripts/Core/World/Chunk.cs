@@ -10,6 +10,7 @@ public class Chunk
 
     public readonly Vector3Int chunkPosition;
     public GameObject gameObject;
+    public Color32[] voxelColors;
 
     public Mesh meshData; // Ссылка на меш, которую нужно будет очищать
 
@@ -24,6 +25,7 @@ public class Chunk
     {
         this.chunkPosition = position;
         this.voxelIDs = new ushort[Width, Height, Width];
+        this.voxelColors = new Color32[Width * Height * Width];
         this.lastActiveTime = Time.time;
     }
     
@@ -39,7 +41,7 @@ public class Chunk
         }
         if (meshData != null)
         {
-            // Это самая важная строка для исправления утечки памяти!
+            // Эта самая важная строка для исправления утечки памяти!
             GameObject.Destroy(meshData);
         }
     }

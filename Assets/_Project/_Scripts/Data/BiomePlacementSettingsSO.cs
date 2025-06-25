@@ -27,6 +27,6 @@ public class BiomePlacementSettingsSO : ScriptableObject
     [Tooltip("Относительные радиусы для каждого яруса (x=ярус3, y=ярус2, z=ярус1). Значения от 0 до 1.")]
     public Vector3 tierPlacementRadii = new Vector3(0.4f, 0.7f, 1.0f);
 
-    [Header("Корневые артефакты (размещаются относительно биома)")]
-    public List<RootArtifactConfig> rootArtifacts;
+    //[Header("Корневые артефакты (размещаются относительно биома)")]
+    //public List<RootArtifactConfig> rootArtifacts;
 }

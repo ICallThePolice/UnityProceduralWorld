@@ -1,4 +1,4 @@
-// --- ФАЙЛ: SubtractiveBiomeGenerator.cs (АРХИТЕКТУРА "ВЛОЖЕННЫЕ ЧАШИ") ---
+#if false// --- ФАЙЛ: SubtractiveBiomeGenerator.cs (АРХИТЕКТУРА "ВЛОЖЕННЫЕ ЧАШИ") ---
 using UnityEngine;
 
 public struct SubtractiveBiomeGenerator : IBiomeTerrainGenerator
@@ -90,3 +90,4 @@ public struct SubtractiveBiomeGenerator : IBiomeTerrainGenerator
         return t * t * (3f - 2f * t);
     }
 }
+#endif

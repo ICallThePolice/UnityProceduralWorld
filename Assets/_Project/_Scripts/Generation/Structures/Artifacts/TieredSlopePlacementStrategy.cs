@@ -1,3 +1,4 @@
+#if false
 // Файл: TieredSlopePlacementStrategy.cs
 using UnityEngine;
 using System.Collections.Generic;
@@ -72,3 +73,4 @@ public class TieredSlopePlacementStrategy : IArtifactPlacementStrategy
         }
     }
 }
+#endif

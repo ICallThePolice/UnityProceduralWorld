@@ -1,4 +1,4 @@
-// ФАЙЛ: AdditiveBiomeGenerator.cs
+#if false// ФАЙЛ: AdditiveBiomeGenerator.cs
 using UnityEngine;
 
 public struct AdditiveBiomeGenerator : IBiomeTerrainGenerator
@@ -15,3 +15,4 @@ public struct AdditiveBiomeGenerator : IBiomeTerrainGenerator
         return baseTerrainHeight + (int)heightModification;
     }
 }
+ #endif

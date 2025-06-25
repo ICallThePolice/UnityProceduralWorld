@@ -1,4 +1,4 @@
-// Файл: OuterRingPlacementStrategy.cs
+#if false// Файл: OuterRingPlacementStrategy.cs
 using UnityEngine;
 using System.Collections.Generic;
 
@@ -52,3 +52,4 @@ public class OuterRingPlacementStrategy : IArtifactPlacementStrategy
         }
     }
 }
+#endif
