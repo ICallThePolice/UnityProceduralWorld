@@ -1,0 +1,28 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9c2d1468846d1d841abdcec1e0cecf5b, type: 3}
+  m_Name: Ereb_Placement
+  m_EditorClassIdentifier: 
+  biome: {fileID: 11400000, guid: c0b63f1671a863d49b06bd4b47b443e7, type: 2}
+  minDistanceBetweenBiomes: 256
+  neutralZoneRadius: 40
+  contrast: {x: 1.5, y: 5}
+  influenceRadius: {x: 64, y: 256}
+  aggressiveness: {x: 0.5, y: 1}
+  maxTiers: {x: 1, y: 1}
+  inversionChance: 0.25
+  tierPlacementRadii: {x: 0.4, y: 0.7, z: 1}
+  rootArtifacts:
+  - artifactSO: {fileID: 11400000, guid: 9a364fa2c2ef2fc43a3036021b1bb7c1, type: 2}
+    placementStrategy: 0
+  - artifactSO: {fileID: 11400000, guid: 9a364fa2c2ef2fc43a3036021b1bb7c1, type: 2}
+    placementStrategy: 1
