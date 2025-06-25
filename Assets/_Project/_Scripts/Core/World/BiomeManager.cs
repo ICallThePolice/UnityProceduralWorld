@@ -277,9 +277,22 @@ public class BiomeManager : MonoBehaviour
         return (int)Mathf.Lerp(baseTerrainHeight, modifiedBiomeHeight, maxInfluence);
     }
 
-    public void CreateArtifactAndSpawnChildren(BiomeArtifactSO artifactSO, Vector2 artifactPos, float finalSize, int groundHeight, float yOffset, BiomeInstance rootBiome, List<BiomeInstance> allBiomesInArea, System.Random random, List<ArtifactInstance> artifactListToFill)
+    public void CreateArtifactAndSpawnChildren(BiomeArtifactSO artifactSO, Vector2 artifactPos, float finalSize, int groundHeight, float yOffset, BiomeInstance rootBiome, List<BiomeInstance> allBiomesInArea, System.Random random, List<ArtifactInstance> artifactListToFill, ushort? overrideVoxelID = null)
     {
-        // --- 1. Создаем текущий артефакт ---
+        // --- 1. Определяем, какой воксель использовать ---
+        ushort finalVoxelID;
+        if (overrideVoxelID.HasValue)
+        {
+            // Если нам передали ID для переопределения, используем его.
+            finalVoxelID = overrideVoxelID.Value;
+        }
+        else
+        {
+            // Иначе, берем основной материал из корневого биома.
+            finalVoxelID = rootBiome.settings.biome.MainVoxel.ID;
+        }
+
+        // --- 2. Создаем текущий артефакт ---
         const float maxArtifactThickness = 15.0f;
         float calculatedHeight = rootBiome.settings.biome.verticalDisplacementScale * artifactSO.relativeHeight;
         float finalHeight = Mathf.Min(calculatedHeight, maxArtifactThickness);
@@ -291,11 +304,12 @@ public class BiomeManager : MonoBehaviour
             calculatedSize = new Vector2(finalSize, finalSize),
             calculatedHeight = finalHeight,
             groundHeight = groundHeight,
-            yOffset = yOffset // Используем переданный yOffset
+            yOffset = yOffset,
+            mainVoxelID = finalVoxelID
         };
         artifactListToFill.Add(parentArtifactInstance);
 
-        // --- 2. РЕКУРСИЯ: Ищем и создаем дочерние артефакты ---
+        // --- 3. РЕКУРСИЯ: Ищем и создаем дочерние артефакты ---
         if (parentArtifactInstance.settings.childArtifacts == null || parentArtifactInstance.settings.childArtifacts.Count == 0)
         {
             return; // Выход из рекурсии
@@ -303,6 +317,12 @@ public class BiomeManager : MonoBehaviour
 
         foreach (var childPlacementInfo in parentArtifactInstance.settings.childArtifacts)
         {
+            ushort? childOverrideID = null;
+            if (childPlacementInfo.overrideVoxel != null)
+            {
+                childOverrideID = childPlacementInfo.overrideVoxel.ID;
+            }
+            // Если есть переопределение ID, используем его, иначе берем основной материал родителя.
             for (int i = 0; i < childPlacementInfo.spawnCount; i++)
             {
                 // Позиция: Позиция родителя + горизонтальное смещение ребенка
@@ -317,23 +337,21 @@ public class BiomeManager : MonoBehaviour
                 // Размер: Рассчитывается относительно размера родителя
                 float childSizeMultiplier = Mathf.Lerp(childPlacementInfo.artifactSO.relativeSize.x, childPlacementInfo.artifactSO.relativeSize.y, (float)random.NextDouble());
                 float childFinalSize = finalSize * childSizeMultiplier;
-                
-                // --- ГЛАВНОЕ ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-                // Высота "земли" для ребенка - это высота его родителя.
+
                 int childGroundHeight = (int)parentArtifactInstance.groundHeight;
-                // А вертикальное смещение берется из настроек связи
                 float childYOffset = childPlacementInfo.yOffset;
 
                 CreateArtifactAndSpawnChildren(
-                    childPlacementInfo.artifactSO, 
-                    childArtifactPos, 
-                    childFinalSize, 
-                    childGroundHeight, 
-                    childYOffset, // Передаем смещение в следующий вызов
-                    rootBiome, 
-                    allBiomesInArea, 
-                    random, 
-                    artifactListToFill
+                    childPlacementInfo.artifactSO,
+                    childArtifactPos,
+                    childFinalSize,
+                    childGroundHeight,
+                    childYOffset,
+                    rootBiome,
+                    allBiomesInArea,
+                    random,
+                    artifactListToFill,
+                    childOverrideID
                 );
             }
         }

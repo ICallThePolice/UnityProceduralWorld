@@ -165,7 +165,8 @@ public class VoxelGenerationPipeline
                     size = artifact.calculatedSize,
                     height = artifact.calculatedHeight,
                     yOffset = artifact.yOffset,
-                    groundHeight = artifact.groundHeight
+                    groundHeight = artifact.groundHeight,
+                    mainVoxelID = artifact.mainVoxelID
                 };
             }
 

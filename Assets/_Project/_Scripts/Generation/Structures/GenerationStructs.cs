@@ -51,6 +51,7 @@ public class ArtifactInstance
     public float calculatedHeight;
     public float yOffset;
     public float groundHeight;
+    public ushort mainVoxelID;
 }
 
 public class BiomeInstance
@@ -96,6 +97,7 @@ public struct ArtifactInstanceBurst
     public float height;
     public float yOffset;
     public float groundHeight;
+    public ushort mainVoxelID;
 }
 
 [System.Serializable]
@@ -114,6 +116,9 @@ public class ChildArtifactPlacement
 {
     [Tooltip("Какой дочерний артефакт создавать.")]
     public BiomeArtifactSO artifactSO;
+    
+    [Tooltip("(Опционально) Если указано, дочерний артефакт будет построен из этого вокселя, а не из материала родительского биома.")]
+    public VoxelTypeSO overrideVoxel;
 
     [Tooltip("Количество, которое нужно попытаться создать.")]
     public int spawnCount = 1;

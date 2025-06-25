@@ -51,7 +51,7 @@ public struct FloatingIsletGenerator : IArtifactGenerator
             // Финальная проверка и установка вокселя
             if (distToArtifactCenter < currentRadius)
             {
-                voxelData.voxelID = this.dominantBiomeMainVoxelID;
+                voxelData.voxelID = artifact.mainVoxelID;
             }
         }
     }
