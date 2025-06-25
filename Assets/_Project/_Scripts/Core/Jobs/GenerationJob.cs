@@ -32,32 +32,31 @@ public struct GenerationJob : IJobParallelFor
         float worldZ = chunkPosition.z * Chunk.Width + z;
         Vector2 worldPos = new Vector2(worldX, worldZ);
 
-        // 2. Поиск ОДНОГО доминантного биома. Никакого смешивания здесь.
+        // 2. Поиск ОДНОГО доминантного биома
         BiomeInstanceBurst dominantBiome = neutralBiome;
         float maxInfluence = 0f;
         for (int i = 0; i < biomeInstances.Length; i++)
         {
-            float distance = Vector2.Distance(worldPos, biomeInstances[i].position);
-            if (distance < biomeInstances[i].influenceRadius)
+            var biome = biomeInstances[i];
+            float distance = Vector2.Distance(worldPos, biome.position);
+            if (distance < biome.influenceRadius)
             {
-                float influence = Mathf.Pow(1f - (distance / biomeInstances[i].influenceRadius), biomeInstances[i].contrast);
+                float influence = Mathf.Pow(1f - (distance / biome.influenceRadius), biome.contrast);
                 if (influence > maxInfluence)
                 {
                     maxInfluence = influence;
-                    dominantBiome = biomeInstances[i];
+                    dominantBiome = biome;
                 }
             }
         }
 
-        // 3. Расчет высоты ландшафта (используя только доминантный биом)
+        // 3. Расчет высоты ландшафта
         int baseTerrainHeight = 5 + Mathf.RoundToInt(((heightMapNoise.GetNoise(worldX, worldZ) + 1f) / 2f) * 20f);
         int modifiedBiomeHeight = baseTerrainHeight;
-
         if (maxInfluence > 0)
         {
             float biomeCenterNoise = heightMapNoise.GetNoise(dominantBiome.position.x, dominantBiome.position.y);
             float dominantBiomeBaseHeight = 10 + Mathf.RoundToInt(((biomeCenterNoise + 1f) / 2f) * 20f);
-
             switch (dominantBiome.terrainModificationType)
             {
                 case TerrainModifier.Additive:
@@ -71,9 +70,9 @@ public struct GenerationJob : IJobParallelFor
                     break;
             }
         }
-        
+
         int finalHeight = (int)Mathf.Lerp(baseTerrainHeight, modifiedBiomeHeight, maxInfluence);
-        
+
         VoxelStateData voxelData = new VoxelStateData { terrainHeight = finalHeight, voxelID = 0 };
 
         // 4. Применение артефактов, меняющих ландшафт (MiniCrater)
@@ -86,14 +85,14 @@ public struct GenerationJob : IJobParallelFor
             }
         }
 
-        // 5. Установка вокселей ландшафта, включая шум детализации
+        // 5. Установка вокселей
         int finalTerrainHeight = Mathf.Clamp(voxelData.terrainHeight, 1, Chunk.Height - 1);
         if (y <= finalTerrainHeight)
         {
             float detailValue = (detailNoise.GetNoise(worldX, worldZ) + 1f) / 2f;
             if (y == finalTerrainHeight && detailValue < 0.3f)
             {
-                voxelData.voxelID = 0; // Air
+                voxelData.voxelID = 0;
             }
             else
             {
@@ -113,7 +112,7 @@ public struct GenerationJob : IJobParallelFor
                 // Убедитесь, что он использует artifact.mainVoxelID
             }
         }
-        
+
         // 7. Запись результата
         resultingVoxelIDs[index] = voxelData.voxelID;
     }

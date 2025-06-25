@@ -30,6 +30,7 @@ public class AsyncChunkMeshRequest
     public JobHandle JobHandle;
     public Chunk TargetChunk;
     public NativeArray<ushort> VoxelIDs;
+    public NativeArray<BiomeInstanceBurst> BiomeInstances;
     public NativeArray<ushort> NeighborPosX, NeighborNegX, NeighborPosZ, NeighborNegZ;
     public NativeList<Vertex> Vertices;
     public NativeList<int> Triangles;
@@ -37,6 +38,8 @@ public class AsyncChunkMeshRequest
     public void DisposeAll()
     {
         VoxelIDs.Dispose();
+
+        if (BiomeInstances.IsCreated) BiomeInstances.Dispose();
         if (NeighborPosX.IsCreated) NeighborPosX.Dispose();
         if (NeighborNegX.IsCreated) NeighborNegX.Dispose();
         if (NeighborPosZ.IsCreated) NeighborPosZ.Dispose();
@@ -247,91 +250,125 @@ public class VoxelGenerationPipeline
     // Главный цикл обработки очереди на создание меша
     private void ProcessMeshGenerationQueue(Vector3Int playerChunkPos, Func<Vector3Int, Chunk> getChunkCallback)
     {
-        int jobsToStart = Mathf.Min(settings.maxMeshJobsPerFrame, SystemInfo.processorCount - runningMeshJobs.Count);
+        if (runningMeshJobs.Count >= SystemInfo.processorCount || chunksToGenerateMesh.Count == 0) return;
 
-        for (int j = 0; j < jobsToStart && chunksToGenerateMesh.Count > 0; j++)
+        chunksToGenerateMesh.Sort((a, b) => Vector3Int.Distance(a.chunkPosition, playerChunkPos).CompareTo(Vector3Int.Distance(b.chunkPosition, playerChunkPos)));
+        Chunk chunkToProcess = chunksToGenerateMesh[0];
+
+        Chunk nPosX = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(1, 0, 0));
+        Chunk nNegX = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(-1, 0, 0));
+        Chunk nPosZ = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(0, 0, 1));
+        Chunk nNegZ = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(0, 0, -1));
+
+        bool allNeighborsReady = (nPosX == null || nPosX.isDataGenerated) && (nNegX == null || nNegX.isDataGenerated) && (nPosZ == null || nPosZ.isDataGenerated) && (nNegZ == null || nNegZ.isDataGenerated);
+
+        if (allNeighborsReady)
         {
+            chunksToGenerateMesh.RemoveAt(0);
 
-            chunksToGenerateMesh.Sort((a, b) => Vector3Int.Distance(a.chunkPosition, playerChunkPos).CompareTo(Vector3Int.Distance(b.chunkPosition, playerChunkPos)));
-            Chunk chunkToProcess = chunksToGenerateMesh[0];
-
-            Chunk nPosX = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(1, 0, 0));
-            Chunk nNegX = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(-1, 0, 0));
-            Chunk nPosZ = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(0, 0, 1));
-            Chunk nNegZ = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(0, 0, -1));
-
-            bool allNeighborsReady = (nPosX == null || nPosX.isDataGenerated) && (nNegX == null || nNegX.isDataGenerated) && (nPosZ == null || nPosZ.isDataGenerated) && (nNegZ == null || nNegZ.isDataGenerated);
-
-            if (allNeighborsReady)
+            List<BiomeInstance> relevantBiomes = biomeManager.GetBiomesInArea(chunkToProcess.chunkPosition, settings.renderDistance);
+            var biomeInstancesForJob = new NativeArray<BiomeInstanceBurst>(relevantBiomes.Count, Allocator.Persistent);
+            for (int i = 0; i < relevantBiomes.Count; i++)
             {
-                chunksToGenerateMesh.RemoveAt(0);
-
-                // 1. Выделяем всю необходимую память ПЕРЕД блоком try
-                var jobVoxelIDs = new NativeArray<ushort>(chunkToProcess.GetAllVoxelIDs(), Allocator.Persistent);
-                var neighborDataPosX = GetNeighborData(nPosX);
-                var neighborDataNegX = GetNeighborData(nNegX);
-                var neighborDataPosZ = GetNeighborData(nPosZ);
-                var neighborDataNegZ = GetNeighborData(nNegZ);
-                var vertices = new NativeList<Vertex>(Allocator.Persistent);
-                var triangles = new NativeList<int>(Allocator.Persistent);
-
-                bool success = false;
-                try
+                var instance = relevantBiomes[i];
+                biomeInstancesForJob[i] = new BiomeInstanceBurst
                 {
-                    // 2. В блоке try мы выполняем основную работу: создаем и запускаем задачу
-                    var job = new MeshingJob
-                    {
-                        chunkPosition = chunkToProcess.chunkPosition,
-                        voxelIDs = jobVoxelIDs,
-                        voxelUvCoordinates = this.voxelUvCoordinates,
-                        hasNeighborPosX = nPosX != null,
-                        hasNeighborNegX = nNegX != null,
-                        hasNeighborPosZ = nPosZ != null,
-                        hasNeighborNegZ = nNegZ != null,
-                        neighborVoxelsPosX = neighborDataPosX,
-                        neighborVoxelsNegX = neighborDataNegX,
-                        neighborVoxelsPosZ = neighborDataPosZ,
-                        neighborVoxelsNegZ = neighborDataNegZ,
-                        vertices = vertices,
-                        triangles = triangles
-                    };
+                    position = instance.position,
+                    influenceRadius = instance.calculatedRadius,
+                    aggressiveness = instance.calculatedAggressiveness,
+                    tiers = instance.calculatedTiers,
+                    contrast = instance.calculatedContrast,
+                    isInverted = instance.isInverted,
+                    biomeHighestPoint = instance.biomeHighestPoint,
 
-                    var handle = job.Schedule();
-                    runningMeshJobs.Add(new AsyncChunkMeshRequest
-                    {
-                        JobHandle = handle,
-                        TargetChunk = chunkToProcess,
-                        VoxelIDs = jobVoxelIDs,
-                        NeighborPosX = neighborDataPosX,
-                        NeighborNegX = neighborDataNegX,
-                        NeighborPosZ = neighborDataPosZ,
-                        NeighborNegZ = neighborDataNegZ,
-                        Vertices = vertices,
-                        Triangles = triangles
-                    });
+                    surfaceVoxelID = instance.settings.biome.SurfaceVoxel.ID,
+                    subSurfaceVoxelID = instance.settings.biome.SubSurfaceVoxel.ID,
+                    mainVoxelID = instance.settings.biome.MainVoxel.ID,
+                    subSurfaceDepth = instance.settings.biome.SubSurfaceDepth,
+                    terrainModificationType = instance.settings.biome.terrainModificationType,
+                    verticalDisplacementScale = instance.settings.biome.verticalDisplacementScale,
+                    tierRadii = instance.calculatedTierRadii
+                };
+            }
 
-                    // 3. Только если все прошло успешно, помечаем операцию как успешную
-                    success = true;
-                }
-                finally
+            var neutralBiomeBurst = new BiomeInstanceBurst
+            {
+                surfaceVoxelID = settings.neutralBiome.SurfaceVoxel.ID,
+                subSurfaceVoxelID = settings.neutralBiome.SubSurfaceVoxel.ID,
+                mainVoxelID = settings.neutralBiome.MainVoxel.ID,
+                subSurfaceDepth = settings.neutralBiome.SubSurfaceDepth,
+                terrainModificationType = settings.neutralBiome.terrainModificationType,
+                verticalDisplacementScale = settings.neutralBiome.verticalDisplacementScale
+            };
+                
+            // 1. Выделяем всю необходимую память ПЕРЕД блоком try
+            var jobVoxelIDs = new NativeArray<ushort>(chunkToProcess.GetAllVoxelIDs(), Allocator.Persistent);
+            var neighborDataPosX = GetNeighborData(nPosX);
+            var neighborDataNegX = GetNeighborData(nNegX);
+            var neighborDataPosZ = GetNeighborData(nPosZ);
+            var neighborDataNegZ = GetNeighborData(nNegZ);
+            var vertices = new NativeList<Vertex>(Allocator.Persistent);
+            var triangles = new NativeList<int>(Allocator.Persistent);
+
+            try
+            {
+                // 2. В блоке try мы выполняем основную работу: создаем и запускаем задачу
+                var job = new MeshingJob
                 {
-                    // 4. Блок finally выполнится В ЛЮБОМ СЛУЧАЕ.
-                    // Если операция не была успешной, значит, произошла ошибка,
-                    // и мы должны немедленно очистить всю память, которую выделили.
-                    if (!success)
-                    {
-                        if (jobVoxelIDs.IsCreated) jobVoxelIDs.Dispose();
-                        if (neighborDataPosX.IsCreated) neighborDataPosX.Dispose();
-                        if (neighborDataNegX.IsCreated) neighborDataNegX.Dispose();
-                        if (neighborDataPosZ.IsCreated) neighborDataPosZ.Dispose();
-                        if (neighborDataNegZ.IsCreated) neighborDataNegZ.Dispose();
-                        if (vertices.IsCreated) vertices.Dispose();
-                        if (triangles.IsCreated) triangles.Dispose();
-                    }
-                }
+                    // Обязательные поля
+                    chunkPosition = chunkToProcess.chunkPosition,
+                    voxelIDs = jobVoxelIDs,
+                    voxelUvCoordinates = this.voxelUvCoordinates,
+                    
+                    // Данные о биомах для смешивания
+                    biomeInstances = biomeInstancesForJob,
+                    neutralBiome = neutralBiomeBurst, // <-- Убедитесь, что этот шум создается и передается
+
+                    // Данные о соседях
+                    hasNeighborPosX = nPosX != null,
+                    hasNeighborNegX = nNegX != null,
+                    hasNeighborPosZ = nPosZ != null,
+                    hasNeighborNegZ = nNegZ != null,
+                    neighborVoxelsPosX = neighborDataPosX,
+                    neighborVoxelsNegX = neighborDataNegX,
+                    neighborVoxelsPosZ = neighborDataPosZ,
+                    neighborVoxelsNegZ = neighborDataNegZ,
+                    
+                    // Выходные данные
+                    vertices = vertices,
+                    triangles = triangles
+                };
+
+                var handle = job.Schedule();
+                runningMeshJobs.Add(new AsyncChunkMeshRequest
+                {
+                    JobHandle = handle,
+                    TargetChunk = chunkToProcess,
+                    VoxelIDs = jobVoxelIDs,
+                    BiomeInstances = biomeInstancesForJob,
+                    NeighborPosX = neighborDataPosX,
+                    NeighborNegX = neighborDataNegX,
+                    NeighborPosZ = neighborDataPosZ,
+                    NeighborNegZ = neighborDataNegZ,
+                    Vertices = vertices,
+                    Triangles = triangles
+                });
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"Error scheduling MeshingJob: {e}");
+                if (jobVoxelIDs.IsCreated) jobVoxelIDs.Dispose();
+                if (neighborDataPosX.IsCreated) neighborDataPosX.Dispose();
+                if (neighborDataNegX.IsCreated) neighborDataNegX.Dispose();
+                if (neighborDataPosZ.IsCreated) neighborDataPosZ.Dispose();
+                if (neighborDataNegZ.IsCreated) neighborDataNegZ.Dispose();
+                if (vertices.IsCreated) vertices.Dispose();
+                if (triangles.IsCreated) triangles.Dispose();
+                    
             }
         }
     }
+    
 
     // Методы проверки завершенных Job'ов
     public void CheckCompletedJobs(Action<Chunk> onDataReadyCallback)
@@ -375,6 +412,7 @@ public class VoxelGenerationPipeline
                     {
                         new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3),
                         new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.Float32, 2),
+                        new VertexAttributeDescriptor(VertexAttribute.Color, VertexAttributeFormat.Float32, 4) // <--- ДОБАВИТЬ
                     };
 
                     mesh.SetVertexBufferParams(request.Vertices.Length, vertexAttributes);
