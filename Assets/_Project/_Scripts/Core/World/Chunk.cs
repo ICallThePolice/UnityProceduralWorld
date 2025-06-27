@@ -1,47 +1,46 @@
 // --- Файл Chunk.cs ---
 using UnityEngine;
-using System;
-using System.Linq;
+using Unity.Mathematics;
 
 public class Chunk
 {
     public const int Width = 16;
     public const int Height = 48;
+    public const int Size = Width * Height * Width;
 
     public readonly Vector3Int chunkPosition;
     public GameObject gameObject;
-    public Color32[] voxelColors;
-    public ushort[] primaryBlockIDs;
-    public ushort[] secondaryBlockIDs;
-    public float[] blendFactors;
-
-    public Mesh meshData; // Ссылка на меш, которую нужно будет очищать
-
-    private readonly ushort[,,] voxelIDs;
+    public Mesh meshData; 
 
     public bool isDataGenerated = false;
     public bool isMeshGenerated = false;
     public bool isModifiedByPlayer = false;
-    public float lastActiveTime; // Этот таймер мы будем использовать для оптимизации
+    public float lastActiveTime;
+
+    public ushort[] primaryBlockIDs;
+    public Color32[] finalColors;
+    public float2[] finalUv0s;
+    public float2[] finalUv1s;
+    public float[] finalTexBlends;
+    public float4[] finalEmissionData;
+    public float4[] finalGapColors;
+    public float2[] finalMaterialProps;
+    public float[] finalGapWidths;
+    public float3[] finalBevelData;
 
     public Chunk(Vector3Int position)
     {
         this.chunkPosition = position;
-        this.voxelIDs = new ushort[Width, Height, Width];
-        this.voxelColors = new Color32[Width * Height * Width];
         this.lastActiveTime = Time.time;
+        this.primaryBlockIDs = new ushort[Size];
+        this.finalColors = new Color32[Size];
     }
 
     public static int GetVoxelIndex(int x, int y, int z)
     {
-        // Правильная формула для "развертывания" 3D-массива [Width, Height, Width]
-        return x * Height * Width + y * Width + z;
+        return y + y * (Width - 1) + z * Height + x * Height * Width;
     }
     
-    // --- НОВЫЙ МЕТОД ---
-    /// <summary>
-    /// Освобождает все ресурсы, связанные с чанком.
-    /// </summary>
     public void Dispose()
     {
         if (gameObject != null)
@@ -50,38 +49,7 @@ public class Chunk
         }
         if (meshData != null)
         {
-            // Эта самая важная строка для исправления утечки памяти!
             GameObject.Destroy(meshData);
         }
-    }
-
-    public ushort[] GetAllVoxelIDs()
-    {
-        return primaryBlockIDs;
-    }
-
-    public ushort GetVoxelID(int x, int y, int z)
-    {
-        return voxelIDs[x, y, z];
-    }
-
-    public void SetVoxelID(int x, int y, int z, ushort id)
-    {
-        voxelIDs[x, y, z] = id;
-        isModifiedByPlayer = true;
-    }
-
-    public void SetPrimaryVoxelIDs(ushort[] ids)
-    {
-        this.primaryBlockIDs = ids;
-    }
-
-    public void SetAllVoxelIDs(ushort[] allVoxels)
-    {
-        if (allVoxels.Length != voxelIDs.Length)
-        {
-            return;
-        }
-        Buffer.BlockCopy(allVoxels, 0, voxelIDs, 0, allVoxels.Length * sizeof(ushort));
     }
 }

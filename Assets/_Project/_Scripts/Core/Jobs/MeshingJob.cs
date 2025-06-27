@@ -1,3 +1,4 @@
+// --- ФАЙЛ: MeshingJob.cs (ИСПРАВЛЕННАЯ И ОПТИМИЗИРОВАННАЯ ВЕРСИЯ) ---
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
@@ -7,22 +8,25 @@ using Unity.Mathematics;
 [BurstCompile]
 public struct MeshingJob : IJob
 {
+    // --- Входные данные о геометрии и соседях ---
     [ReadOnly] public NativeArray<ushort> primaryBlockIDs;
-    [ReadOnly] public NativeArray<ushort> secondaryBlockIDs;
-    [ReadOnly] public NativeArray<float> blendFactors;
-    [ReadOnly] public NativeArray<Vector2> voxelIdToUvMap;
-    [ReadOnly] public NativeArray<Color32> voxelIdToColorMap;
-    [ReadOnly] public NativeArray<Vector4> voxelIdToEmissionDataMap;
-    [ReadOnly] public NativeArray<Vector4> voxelIdToGapColorMap;
-    [ReadOnly] public NativeArray<Vector2> voxelIdToMaterialPropsMap;
     [ReadOnly] public NativeArray<ushort> neighborVoxelsPosX;
     [ReadOnly] public NativeArray<ushort> neighborVoxelsNegX;
     [ReadOnly] public NativeArray<ushort> neighborVoxelsPosZ;
     [ReadOnly] public NativeArray<ushort> neighborVoxelsNegZ;
-    [ReadOnly] public NativeArray<VoxelCategory> voxelIdToCategoryMap;
-    
-    [ReadOnly] public Vector2 atlasTileSize;
 
+    // --- Входные данные: ЗАРАНЕЕ ВЫЧИСЛЕННЫЕ свойства для каждого вокселя ---
+    [ReadOnly] public NativeArray<Color32> finalColors;
+    [ReadOnly] public NativeArray<float2> finalUv0s;
+    [ReadOnly] public NativeArray<float2> finalUv1s;
+    [ReadOnly] public NativeArray<float> finalTexBlends;
+    [ReadOnly] public NativeArray<float4> finalEmissionData;
+    [ReadOnly] public NativeArray<float4> finalGapColors;
+    [ReadOnly] public NativeArray<float2> finalMaterialProps;
+    [ReadOnly] public NativeArray<float> finalGapWidths;
+    [ReadOnly] public NativeArray<float3> finalBevelData;
+
+    // --- Выходные данные для меша ---
     public NativeList<Vertex> vertices;
     public NativeList<int> triangles;
 
@@ -32,70 +36,55 @@ public struct MeshingJob : IJob
         for (int x = 0; x < Chunk.Width; x++)
         for (int z = 0; z < Chunk.Width; z++)
         {
-            // ИЗМЕНЕНО: Используем i вместо index
-            int i = Chunk.GetVoxelIndex(x, y, z);
-            if (primaryBlockIDs[i] == 0) continue;
-            
-            // ИЗМЕНЕНО: Передаем 'i' в CreateFace
-            if (IsVoxelTransparent(x, y + 1, z)) CreateFace(Direction.Top,    new Vector3(x, y, z), i);
-            if (IsVoxelTransparent(x, y - 1, z)) CreateFace(Direction.Bottom, new Vector3(x, y, z), i);
-            if (IsVoxelTransparent(x + 1, y, z)) CreateFace(Direction.Right,  new Vector3(x, y, z), i);
-            if (IsVoxelTransparent(x - 1, y, z)) CreateFace(Direction.Left,   new Vector3(x, y, z), i);
-            if (IsVoxelTransparent(x, y, z + 1)) CreateFace(Direction.Front,  new Vector3(x, y, z), i);
-            if (IsVoxelTransparent(x, y, z - 1)) CreateFace(Direction.Back,   new Vector3(x, y, z), i);
+            int voxelIndex = Chunk.GetVoxelIndex(x, y, z);
+            if (primaryBlockIDs[voxelIndex] == 0) continue;
+
+            var position = new Vector3(x, y, z);
+            if (IsVoxelTransparent(x, y + 1, z)) CreateFace(Direction.Top,    position, voxelIndex);
+            if (IsVoxelTransparent(x, y - 1, z)) CreateFace(Direction.Bottom, position, voxelIndex);
+            if (IsVoxelTransparent(x + 1, y, z)) CreateFace(Direction.Right,  position, voxelIndex);
+            if (IsVoxelTransparent(x - 1, y, z)) CreateFace(Direction.Left,   position, voxelIndex);
+            if (IsVoxelTransparent(x, y, z + 1)) CreateFace(Direction.Front,  position, voxelIndex);
+            if (IsVoxelTransparent(x, y, z - 1)) CreateFace(Direction.Back,   position, voxelIndex);
         }
     }
 
     private void CreateFace(Direction direction, Vector3 voxelLocalPosition, int voxelIndex)
     {
         int vertexIndex = vertices.Length;
+        int dirIndex = (int)direction;
 
-            // --- ПОДГОТОВКА ДАННЫХ (без изменений) ---
-            ushort pBlockID = primaryBlockIDs[voxelIndex];
-            ushort sBlockID = secondaryBlockIDs[voxelIndex];
-            float blend = blendFactors[voxelIndex];
-
-            Color32 pColor = voxelIdToColorMap[pBlockID];
-            Color32 sColor = sBlockID > 0 ? voxelIdToColorMap[sBlockID] : pColor;
-            Color32 finalColor = Color32.Lerp(pColor, sColor, blend);
-
-            Vector2 uv0_base = voxelIdToUvMap[pBlockID];
-            Vector2 uv1_base = sBlockID > 0 ? voxelIdToUvMap[sBlockID] : uv0_base;
-
-            Vector4 pEmission = voxelIdToEmissionDataMap[pBlockID]; 
-            Vector4 sEmission = sBlockID > 0 ? voxelIdToEmissionDataMap[sBlockID] : pEmission;
-            Vector4 finalEmission = Vector4.Lerp(pEmission, sEmission, blend);
-            
-            Vector4 pGapColor = voxelIdToGapColorMap[pBlockID];
-            Vector4 sGapColor = sBlockID > 0 ? voxelIdToGapColorMap[sBlockID] : pGapColor;
-            Vector4 finalGapColor = Vector4.Lerp(pGapColor, sGapColor, blend);
-
-            Vector2 pMaterialProps = voxelIdToMaterialPropsMap[pBlockID];
-            Vector2 sMaterialProps = sBlockID > 0 ? voxelIdToMaterialPropsMap[sBlockID] : pMaterialProps;
-            Vector2 finalMaterialProps = Vector2.Lerp(pMaterialProps, sMaterialProps, blend);
-
-            // --- НОВЫЙ КОД: Получаем нормаль и тангент для текущей грани ---
-            float3 normal = VoxelData.FaceNormals[(int)direction];
-            float4 tangent = VoxelData.FaceTangents[(int)direction];
-
+        // --- ИЗМЕНЕНИЕ ---
+        // Просто создаем 4 вертекса в цикле, присваивая им нужные значения.
+        // Это эффективнее, чем создавать "шаблон" и копировать его.
         for (int i = 0; i < 4; i++)
         {
+            // --- ИСПРАВЛЕНИЕ ОШИБКИ ТИПОВ ---
+            // Явно приводим UnityEngine.Vector2 к Unity.Mathematics.float2 перед сложением.
+            float2 uv0 = finalUv0s[voxelIndex] + (float2)VoxelData.FaceUVs[i];
+            float2 uv1 = finalUv1s[voxelIndex] + (float2)VoxelData.FaceUVs[i];
+            
             vertices.Add(new Vertex
             {
-                position = voxelLocalPosition + VoxelData.FaceVertices[(int)direction * 4 + i],
-                normal = normal,
-                tangent = tangent,
-                color = finalColor,
-                uv0 = uv0_base + VoxelData.FaceUVs[i] * atlasTileSize,
-                uv1 = uv1_base + VoxelData.FaceUVs[i] * atlasTileSize,
-                texBlend = blend,
-                emissionData = finalEmission,
-                gapColor = finalGapColor,
-                materialProps = finalMaterialProps
+                position = voxelLocalPosition + VoxelData.FaceVertices[dirIndex * 4 + i],
+                normal = VoxelData.FaceNormals[dirIndex],
+                tangent = VoxelData.FaceTangents[dirIndex],
+                
+                // Присваиваем заранее вычисленные данные
+                color = finalColors[voxelIndex],
+                texBlend = finalTexBlends[voxelIndex],
+                emissionData = finalEmissionData[voxelIndex],
+                gapColor = finalGapColors[voxelIndex],
+                materialProps = finalMaterialProps[voxelIndex],
+                gapWidth = finalGapWidths[voxelIndex],
+                bevelData = finalBevelData[voxelIndex],
+                
+                // Присваиваем UV с учетом смещения для атласа
+                uv0 = uv0,
+                uv1 = uv1
             });
         }
 
-        // ИЗМЕНЕНО: Стандартная триангуляция для квадрата
         triangles.Add(vertexIndex + 0);
         triangles.Add(vertexIndex + 1);
         triangles.Add(vertexIndex + 2);
@@ -106,18 +95,14 @@ public struct MeshingJob : IJob
 
     private bool IsVoxelTransparent(int x, int y, int z)
     {
-        // Проверка по высоте (без изменений)
         if (y < 0 || y >= Chunk.Height) return true;
         
-        // Проверка внутри текущего чанка (без изменений)
         if (x >= 0 && x < Chunk.Width && z >= 0 && z < Chunk.Width)
         {
             return primaryBlockIDs[Chunk.GetVoxelIndex(x, y, z)] == 0;
         }
 
-        // --- ИСПРАВЛЕННАЯ, НАДЕЖНАЯ ЛОГИКА ПРОВЕРКИ СОСЕДЕЙ ---
         if (x < 0) {
-            // Сначала проверяем, что массив соседа вообще существует и не пустой
             if (!neighborVoxelsNegX.IsCreated || neighborVoxelsNegX.Length == 0) return true;
             return neighborVoxelsNegX[Chunk.GetVoxelIndex(Chunk.Width - 1, y, z)] == 0;
         }
@@ -134,22 +119,35 @@ public struct MeshingJob : IJob
             return neighborVoxelsPosZ[Chunk.GetVoxelIndex(x, y, 0)] == 0;
         }
         
-        return true; // Эта строка не должна быть достигнута, но нужна для компилятора
+        return true; 
     }
 }
 
-// Этот класс тоже без изменений
+
+/// <summary>
+/// Статический класс-помощник, хранящий данные о геометрии граней вокселя.
+/// Эти данные постоянны и могут быть использованы в Burst-компилируемом коде.
+/// </summary>
 public static class VoxelData
 {
+    // Позиции вершин для 6 граней вокселя (4 вертекса на грань)
     public static readonly Vector3[] FaceVertices = {
         // Back, Front, Top, Bottom, Left, Right
+        // Индексы 0-3: Back (-Z)
         new Vector3(0, 0, 0), new Vector3(0, 1, 0), new Vector3(1, 1, 0), new Vector3(1, 0, 0),
+        // Индексы 4-7: Front (+Z)
         new Vector3(1, 0, 1), new Vector3(1, 1, 1), new Vector3(0, 1, 1), new Vector3(0, 0, 1),
+        // Индексы 8-11: Top (+Y)
         new Vector3(0, 1, 0), new Vector3(0, 1, 1), new Vector3(1, 1, 1), new Vector3(1, 1, 0),
+        // Индексы 12-15: Bottom (-Y)
         new Vector3(0, 0, 1), new Vector3(0, 0, 0), new Vector3(1, 0, 0), new Vector3(1, 0, 1),
+        // Индексы 16-19: Left (-X)
         new Vector3(0, 0, 1), new Vector3(0, 1, 1), new Vector3(0, 1, 0), new Vector3(0, 0, 0),
+        // Индексы 20-23: Right (+X)
         new Vector3(1, 0, 0), new Vector3(1, 1, 0), new Vector3(1, 1, 1), new Vector3(1, 0, 1)
     };
+    
+    // Нормали для 6 граней
     public static readonly float3[] FaceNormals = {
         new float3(0, 0, -1), // Back
         new float3(0, 0, 1),  // Front
@@ -159,6 +157,7 @@ public static class VoxelData
         new float3(1, 0, 0)   // Right
     };
 
+    // Тангенты для 6 граней
     public static readonly float4[] FaceTangents = {
         new float4(1, 0, 0, -1), // Back
         new float4(-1, 0, 0, -1),// Front
@@ -167,6 +166,8 @@ public static class VoxelData
         new float4(0, 0, -1, -1),// Left
         new float4(0, 0, 1, -1)  // Right
     };
+    
+    // Базовые UV координаты для одной грани (квадрата)
     public static readonly Vector2[] FaceUVs = {
         new Vector2(0, 0), new Vector2(0, 1), new Vector2(1, 1), new Vector2(1, 0)
     };

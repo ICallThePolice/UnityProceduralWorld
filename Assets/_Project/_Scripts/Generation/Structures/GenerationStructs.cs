@@ -44,15 +44,17 @@ public interface IArtifactGenerator
 public struct Vertex
 {
     public float3 position; 
-    public float3 normal;       // <-- ДОБАВЛЕНО
-    public float4 tangent;       // 12 байт (3 * float)
-    public Color32 color;         // 4 байта
-    public float2 uv0;           // 8 байт (2 * float)
-    public float2 uv1;           // 8 байт (2 * float)
-    public float  texBlend;      // 4 байта (1 * float)
-    public float4 emissionData;  // 16 байт (4 * float)
-    public float4 gapColor;      // 16 байт (4 * float)
-    public float2 materialProps; // 8 байт (2 * float)
+    public float3 normal;       
+    public float4 tangent;
+    public Color32 color;         // Итоговый смешанный цвет
+    public float2 uv0;           // UV для базовой текстуры
+    public float2 uv1;           // UV для текстуры наложения
+    public float  texBlend;      // Сила смешивания текстур
+    public float4 emissionData;  // Итоговые данные о свечении (R,G,B, Strength)
+    public float4 gapColor;      // Итоговый цвет шва
+    public float2 materialProps; // Итоговые свойства материала (Smoothness, Metallic)
+    public float  gapWidth;      // Итоговая ширина шва
+    public float3 bevelData;     // Итоговые данные о фаске (Width, Strength, Direction)
 }
 
 public class ArtifactInstance
@@ -82,6 +84,46 @@ public class BiomeInstance
     public float biomeHighestPoint;
     public Vector3 calculatedTierRadii;
     public List<ArtifactInstance> childArtifacts = new List<ArtifactInstance>(); 
+}
+
+/// <summary>
+/// Burst-совместимая структура для хранения данных о базовом типе вокселя.
+/// </summary>
+[System.Serializable]
+public struct VoxelTypeDataBurst
+{
+    public ushort id;
+    public Color32 baseColor;
+    public float2 baseUV; // Координаты в атласе (не нормализованные)
+}
+
+/// <summary>
+/// Burst-совместимая структура для хранения данных о наложении (оверлее).
+/// </summary>
+[System.Serializable]
+public struct VoxelOverlayDataBurst
+{
+    public ushort id;
+    public int priority;
+    public Color32 tintColor;
+    public float2 overlayUV; // Координаты в атласе
+    public float gapWidth;
+    public Color32 gapColor; // Используем Color32 для экономии
+    public float2 materialProps; // x = Smoothness, y = Metallic
+    public float4 emissionData;  // x,y,z = Color, w = Strength
+    public float3 bevelData;     // x = Width, y = Strength, z = Direction
+}
+
+/// <summary>
+/// Burst-совместимая структура для передачи информации о размещении оверлея в мире.
+/// </summary>
+[System.Serializable]
+public struct OverlayPlacementDataBurst
+{
+    public ushort overlayID; // ID оверлея, который нужно применить
+    public float2 position;  // Центр влияния
+    public float radius;     // Радиус влияния
+    public float blendSharpness; // Резкость краев влияния (0-1)
 }
 
 [System.Serializable]

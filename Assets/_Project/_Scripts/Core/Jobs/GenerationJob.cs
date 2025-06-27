@@ -1,189 +1,91 @@
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
-using UnityEngine;
 using Unity.Mathematics;
-
-// GenerationJob.cs
 
 [BurstCompile]
 public struct GenerationJob : IJob
 {
-    // --- Входные данные (без изменений) ---
-    public Vector3Int chunkPosition;
-    public FastNoiseLite heightMapNoise;
+    // --- ВХОДНЫЕ ДАННЫЕ (ReadOnly) ---
+    [ReadOnly] public Vector3Int chunkPosition;
+    [ReadOnly] public FastNoiseLite heightMapNoise;
     [ReadOnly] public NativeArray<BiomeInstanceBurst> biomeInstances;
-    [ReadOnly] public ushort globalBiomeBlockID;
-    [ReadOnly] public NativeArray<VoxelCategory> voxelIdToCategoryMap;
+    [ReadOnly] public NativeArray<OverlayPlacementDataBurst> overlayPlacements;
+    [ReadOnly] public NativeArray<VoxelTypeDataBurst> voxelTypeMap;
+    [ReadOnly] public NativeArray<VoxelOverlayDataBurst> voxelOverlayMap;
+    [ReadOnly] public float2 atlasTileSize;
 
-    // --- Выходные данные (без изменений) ---
-    public NativeArray<ushort> primaryBlockIDs;
-    public NativeArray<ushort> secondaryBlockIDs;
-    public NativeArray<float> blendFactors;
+    // --- ВЫХОДНЫЕ ДАННЫЕ (WriteOnly) ---
+    [WriteOnly] public NativeArray<ushort> primaryBlockIDs;
+    [WriteOnly] public NativeArray<Color32> finalColors;
+    [WriteOnly] public NativeArray<float2> finalUv0s;
+    [WriteOnly] public NativeArray<float2> finalUv1s;
+    [WriteOnly] public NativeArray<float> finalTexBlends;
+    [WriteOnly] public NativeArray<float4> finalEmissionData;
+    [WriteOnly] public NativeArray<float4> finalGapColors;
+    [WriteOnly] public NativeArray<float2> finalMaterialProps;
+    [WriteOnly] public NativeArray<float> finalGapWidths;
+    [WriteOnly] public NativeArray<float3> finalBevelData;
 
     public void Execute()
     {
         for (int x = 0; x < Chunk.Width; x++)
-        {
             for (int z = 0; z < Chunk.Width; z++)
             {
                 int worldX = chunkPosition.x * Chunk.Width + x;
                 int worldZ = chunkPosition.z * Chunk.Width + z;
+                float2 worldPos = new float2(worldX, worldZ);
 
-                // --- Этап 1: Рассчитываем базовую высоту ландшафта ---
+                // 1. Рассчитываем базовую высоту
                 float heightValue = heightMapNoise.GetNoise(worldX, worldZ);
                 int surfaceHeight = (int)math.remap(-1, 1, 0, Chunk.Height, heightValue);
 
-                // --- Этап 2: Находим два самых влиятельных биома в этой точке ---
-                int strongestBiomeIndex = -1;
-                int secondStrongestBiomeIndex = -1;
-                float maxInfluence = 0f;
-                float secondMaxInfluence = 0f;
+                // 2. Находим базовый VoxelID (например, из самого влиятельного биома)
+                ushort baseVoxelID = GetBaseVoxelID(worldPos);
+                VoxelTypeDataBurst baseVoxelData = voxelTypeMap[baseVoxelID];
 
-                for (int i = 0; i < biomeInstances.Length; i++)
-                {
-                    var currentBiome = biomeInstances[i]; // Для удобства
-                    float dist = math.distance(new float2(worldX, worldZ), currentBiome.position);
+                // 3. Находим самый влиятельный оверлей в этой точке
+                ushort overlayID = GetDominantOverlayID(worldPos);
+                VoxelOverlayDataBurst overlayData = overlayID > 0 ? voxelOverlayMap[overlayID] : default;
 
-                    if (dist > currentBiome.influenceRadius) continue;
+                // 4. Вычисляем итоговые смешанные свойства
+                //    ВАША ЗАДАЧА: реализовать логику внутри этих функций
+                Color32 finalColor = CalculateFinalColor(baseVoxelData, overlayData);
+                float2 uv0 = baseVoxelData.baseUV / atlasTileSize;
+                float2 uv1 = overlayData.overlayUV / atlasTileSize;
+                float blend = CalculateTextureBlend(baseVoxelData, overlayData);
+                float4 emission = overlayData.emissionData; // Упрощенно, можно смешивать
+                                                            // ... и так далее для всех `final...` свойств
 
-                    float influence;
-                    float normalizedDist = dist / currentBiome.influenceRadius;
-
-                    // Проверяем, находимся ли мы внутри "ядра" биома
-                    if (normalizedDist < currentBiome.coreRadiusPercentage)
-                    {
-                        // Если да, то влияние максимально (100%), смешивания нет.
-                        influence = 1.0f;
-                    }
-                    else
-                    {
-                        // Если нет, мы находимся в "зоне смешивания".
-                        // Нам нужно пересчитать наше положение от 0 до 1 внутри этой зоны.
-                        float blendZoneWidth = 1.0f - currentBiome.coreRadiusPercentage;
-
-                        // Защита от деления на ноль, если ядро занимает 100%
-                        if (blendZoneWidth < 0.0001f)
-                        {
-                            influence = 0f; // Мы за пределами ядра, значит, и за пределами биома
-                        }
-                        else
-                        {
-                            // Насколько далеко мы зашли в зону смешивания
-                            float distIntoBlendZone = normalizedDist - currentBiome.coreRadiusPercentage;
-
-                            // Нормализуем это расстояние (от 0 до 1)
-                            float t = distIntoBlendZone / blendZoneWidth;
-
-                            // Теперь применяем нашу формулу резкости к этому значению 't'
-                            float sharpnessExponent = 1.0f + currentBiome.sharpness * 15.0f;
-                            influence = math.pow(1.0f - t, sharpnessExponent);
-                        }
-                    }
-
-                    if (influence > maxInfluence)
-                    {
-                        secondMaxInfluence = maxInfluence;
-                        secondStrongestBiomeIndex = strongestBiomeIndex;
-                        maxInfluence = influence;
-                        strongestBiomeIndex = i;
-                    }
-                    else if (influence > secondMaxInfluence)
-                    {
-                        secondMaxInfluence = influence;
-                        secondStrongestBiomeIndex = i;
-                    }
-                }
-
-                // --- Этап 3: ИНТЕЛЛЕКТУАЛЬНОЕ ОПРЕДЕЛЕНИЕ БЛОКОВ И СМЕШИВАНИЯ ---
-                ushort primaryBlockId;
-                ushort secondaryBlockId;
-                float blendFactor;
-
-                if (strongestBiomeIndex == -1)
-                {
-                    // Если никакие биомы не влияют, используем нейтральный ландшафт
-                    primaryBlockId = globalBiomeBlockID;
-                    secondaryBlockId = 0;
-                    blendFactor = 0;
-                }
-                else
-                {
-                    // Основной блок - это блок самого сильного биома
-                    primaryBlockId = biomeInstances[strongestBiomeIndex].blockID;
-
-                    // Определяем, что будет "фоном" для смешивания:
-                    // либо второй по силе биом, либо нейтральный ландшафт
-                    float neutralLandscapeInfluence = 1.0f - maxInfluence;
-                    ushort backgroundBlockId = globalBiomeBlockID;
-                    if (secondStrongestBiomeIndex != -1 && secondMaxInfluence > neutralLandscapeInfluence)
-                    {
-                        backgroundBlockId = biomeInstances[secondStrongestBiomeIndex].blockID;
-                    }
-                    
-                    // Получаем категории основного блока и фона
-                    VoxelCategory primaryCategory = voxelIdToCategoryMap[primaryBlockId];
-                    VoxelCategory backgroundCategory = voxelIdToCategoryMap[backgroundBlockId];
-
-                    // Вызываем нашу функцию с правилами, чтобы решить, смешивать ли их
-                    if (CanBiomesBlend(primaryCategory, backgroundCategory))
-                    {
-                        // РАЗРЕШАЕМ СМЕШИВАНИЕ
-                        secondaryBlockId = backgroundBlockId;
-                        if (secondStrongestBiomeIndex != -1 && secondMaxInfluence > neutralLandscapeInfluence)
-                        {
-                            blendFactor = secondMaxInfluence / (maxInfluence + secondMaxInfluence);
-                        }
-                        else
-                        {
-                            blendFactor = neutralLandscapeInfluence;
-                        }
-                    }
-                    else
-                    {
-                        // ЗАПРЕЩАЕМ СМЕШИВАНИЕ (например, Руда и Растение)
-                        secondaryBlockId = 0;
-                        blendFactor = 0;
-                    }
-                }
-
-                // --- Этап 4: Заполняем колонку вокселей вычисленными данными (без изменений) ---
                 for (int y = 0; y < Chunk.Height; y++)
                 {
                     int voxelIndex = Chunk.GetVoxelIndex(x, y, z);
                     if (y < surfaceHeight)
                     {
-                        primaryBlockIDs[voxelIndex] = primaryBlockId;
-                        secondaryBlockIDs[voxelIndex] = secondaryBlockId;
-                        blendFactors[voxelIndex] = blendFactor;
+                        primaryBlockIDs[voxelIndex] = baseVoxelID; // или ID оверлея, если он заменяет блок
+                        finalColors[voxelIndex] = finalColor;
+                        finalUv0s[voxelIndex] = uv0;
+                        finalUv1s[voxelIndex] = uv1;
+                        finalTexBlends[voxelIndex] = blend;
+                        finalEmissionData[voxelIndex] = emission;
+                        finalGapColors[voxelIndex] = new float4(overlayData.gapColor.r / 255f, overlayData.gapColor.g / 255f, overlayData.gapColor.b / 255f, overlayData.gapColor.a / 255f);
+                        finalMaterialProps[voxelIndex] = overlayData.materialProps;
+                        finalGapWidths[voxelIndex] = overlayData.gapWidth;
+                        finalBevelData[voxelIndex] = overlayData.bevelData;
                     }
                     else
                     {
+                        // Заполняем воздухом
                         primaryBlockIDs[voxelIndex] = 0;
-                        secondaryBlockIDs[voxelIndex] = 0;
-                        blendFactors[voxelIndex] = 0;
                     }
                 }
             }
-        }
     }
-
-    private bool CanBiomesBlend(VoxelCategory cat1, VoxelCategory cat2)
-    {
-        // ПРАВИЛО №1: Объекты одной категории всегда смешиваются
-        if (cat1 == cat2)
-        {
-            return true;
-        }
-
-        // ПРАВИЛО №2: Разрешаем Руде (Ore) и Кристаллам (Crystal) смешиваться с Ландшафтом (Landscape)
-        if ((cat1 == VoxelCategory.Landscape && (cat2 == VoxelCategory.Ore || cat2 == VoxelCategory.Crystal)) ||
-            (cat2 == VoxelCategory.Landscape && (cat1 == VoxelCategory.Ore || cat1 == VoxelCategory.Crystal)))
-        {
-            return true;
-        }
-
-        // Во всех остальных случаях - запрещаем смешивание (например, Постройки и Руда)
-        return false;
-    }
+    
+    // ВАША ЗАДАЧА: Реализовать эти методы с вашей логикой
+    private ushort GetBaseVoxelID(float2 worldPos) { /*...*/ return 1; } // Возвращает ID камня/земли
+    private ushort GetDominantOverlayID(float2 worldPos) { /*...*/ return 0; } // Возвращает ID руды/мха
+    private Color32 CalculateFinalColor(VoxelTypeDataBurst baseData, VoxelOverlayDataBurst overlayData) { return baseData.baseColor; }
+    private float CalculateTextureBlend(VoxelTypeDataBurst baseData, VoxelOverlayDataBurst overlayData) { return 0f; }
+    // ... и так далее для других сложных свойств ...
 }
