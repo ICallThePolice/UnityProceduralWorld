@@ -94,7 +94,9 @@ public struct VoxelTypeDataBurst
 {
     public ushort id;
     public Color32 baseColor;
-    public float2 baseUV; // Координаты в атласе (не нормализованные)
+    public float2 baseUV;
+    public float gapWidth;
+    public Color32 gapColor;
 }
 
 /// <summary>

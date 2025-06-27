@@ -1,5 +1,7 @@
+// --- ФАЙЛ: BiomeManager.cs (ДОПОЛНЕННАЯ ВЕРСИЯ) ---
 using UnityEngine;
 using System.Collections.Generic;
+using Unity.Mathematics; // Для float2
 
 public class BiomeManager : MonoBehaviour
 {
@@ -39,6 +41,19 @@ public class BiomeManager : MonoBehaviour
         chaosNoise = new FastNoiseLite(placementSeed + 1);
         chaosNoise.SetNoiseType(FastNoiseLite.NoiseType.Value);
         chaosNoise.SetFrequency(0.1f);
+    }
+    
+    // --- НОВЫЙ МЕТОД (ЗАГЛУШКА) ---
+    /// <summary>
+    /// Возвращает список всех оверлеев (руд, и т.д.), которые могут влиять на данный чанк.
+    /// ПОКА ЧТО ЭТО ПРОСТО ЗАГЛУШКА.
+    /// </summary>
+    public List<OverlayPlacementDataBurst> GetOverlaysInArea(Vector3Int chunkPosition, int renderDistance)
+    {
+        // В будущем здесь будет логика поиска и создания рудных жил,
+        // залежей кристаллов и т.д. в области видимости.
+        // Сейчас мы просто возвращаем пустой список, чтобы система работала.
+        return new List<OverlayPlacementDataBurst>();
     }
 
     public List<BiomeInstance> GetBiomesInArea(Vector3Int chunkPosition, int renderDistance)
@@ -101,8 +116,7 @@ public class BiomeManager : MonoBehaviour
             calculatedRadius = Mathf.Lerp(settings.influenceRadius.x, settings.influenceRadius.y, finalProgression),
             calculatedContrast = Mathf.Lerp(settings.contrast.x, settings.contrast.y, finalProgression),
             coreRadiusPercentage = settings.coreRadiusPercentage,
-            sharpness = settings.sharpness 
-            // Остальные сложные параметры нам пока не нужны
+            sharpness = settings.sharpness
         };
 
         placedBiomeCache.Add(regionCoords, newInstance);

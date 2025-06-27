@@ -6,14 +6,11 @@ using UnityEngine.Rendering;
 using System;
 using Unity.Mathematics;
 
-#region Вспомогательные классы запросов (ИСПРАВЛЕНО)
-
+#region Вспомогательные классы запросов
 public class AsyncChunkDataRequest
 {
     public JobHandle JobHandle;
     public Chunk TargetChunk;
-    
-    // Выходные данные из GenerationJob
     public NativeArray<ushort> primaryBlockIDs;
     public NativeArray<Color32> finalColors;
     public NativeArray<float2> finalUv0s;
@@ -24,8 +21,6 @@ public class AsyncChunkDataRequest
     public NativeArray<float2> finalMaterialProps;
     public NativeArray<float> finalGapWidths;
     public NativeArray<float3> finalBevelData;
-    
-    // Входные данные, которые нужно освободить после завершения
     public NativeArray<BiomeInstanceBurst> BiomeInstances;
     public NativeArray<OverlayPlacementDataBurst> OverlayPlacements;
 
@@ -50,8 +45,6 @@ public class AsyncChunkMeshRequest
 {
     public JobHandle JobHandle;
     public Chunk TargetChunk;
-    
-    // --- ИСПРАВЛЕНО: Этот класс теперь точно соответствует входам MeshingJob ---
     public NativeArray<ushort> primaryBlockIDs;
     public NativeArray<Color32> finalColors;
     public NativeArray<float2> finalUv0s;
@@ -62,20 +55,12 @@ public class AsyncChunkMeshRequest
     public NativeArray<float2> finalMaterialProps;
     public NativeArray<float> finalGapWidths;
     public NativeArray<float3> finalBevelData;
-    
-    // Данные о соседях
-    public NativeArray<ushort> NeighborPosX;
-    public NativeArray<ushort> NeighborNegX;
-    public NativeArray<ushort> NeighborPosZ;
-    public NativeArray<ushort> NeighborNegZ;
-    
-    // Выходные данные меша
+    public NativeArray<ushort> NeighborPosX, NeighborNegX, NeighborPosZ, NeighborNegZ;
     public NativeList<Vertex> Vertices;
     public NativeList<int> Triangles;
 
     public void DisposeAll()
     {
-        // Теперь освобождаем все новые массивы
         if (primaryBlockIDs.IsCreated) primaryBlockIDs.Dispose();
         if (finalColors.IsCreated) finalColors.Dispose();
         if (finalUv0s.IsCreated) finalUv0s.Dispose();
@@ -86,18 +71,18 @@ public class AsyncChunkMeshRequest
         if (finalMaterialProps.IsCreated) finalMaterialProps.Dispose();
         if (finalGapWidths.IsCreated) finalGapWidths.Dispose();
         if (finalBevelData.IsCreated) finalBevelData.Dispose();
-        
         if (NeighborPosX.IsCreated) NeighborPosX.Dispose();
         if (NeighborNegX.IsCreated) NeighborNegX.Dispose();
         if (NeighborPosZ.IsCreated) NeighborPosZ.Dispose();
         if (NeighborNegZ.IsCreated) NeighborNegZ.Dispose();
-        
         if (Vertices.IsCreated) Vertices.Dispose();
         if (Triangles.IsCreated) Triangles.Dispose();
     }
 }
 #endregion
-
+///
+/// <summary> НАЧАЛО КЛАССА VoxelGenerationPipeline </summary>
+///
 public class VoxelGenerationPipeline
 {
     public event Action<Chunk, Mesh> OnChunkMeshReady;
@@ -116,9 +101,16 @@ public class VoxelGenerationPipeline
     {
         this.settings = settings;
         this.biomeManager = biomeManager;
-
         InitializeVoxelTypeMap();
         InitializeVoxelOverlayMap();
+    }
+
+    public void RequestDataGeneration(Chunk chunk) { if (!chunksToGenerateData.Contains(chunk) && !chunk.isDataGenerated) chunksToGenerateData.Add(chunk); }
+    public void RequestMeshGeneration(Chunk chunk) { if (!chunksToGenerateMesh.Contains(chunk) && !chunk.isMeshGenerated) chunksToGenerateMesh.Add(chunk); }
+    public void CancelChunkGeneration(Vector3Int chunkPos)
+    {
+        chunksToGenerateData.RemoveAll(chunk => chunk.chunkPosition == chunkPos);
+        chunksToGenerateMesh.RemoveAll(chunk => chunk.chunkPosition == chunkPos);
     }
 
     private void InitializeVoxelTypeMap()
@@ -138,14 +130,15 @@ public class VoxelGenerationPipeline
             {
                 id = voxelType.ID,
                 baseColor = voxelType.baseColor,
-                baseUV = new float2(voxelType.textureAtlasCoord.x, voxelType.textureAtlasCoord.y)
+                baseUV = new float2(voxelType.textureAtlasCoord.x, voxelType.textureAtlasCoord.y),
+                gapWidth = voxelType.GapWidth,
+                gapColor = voxelType.GapColor
             };
         }
     }
 
     private void InitializeVoxelOverlayMap()
     {
-        // Предполагается, что в WorldSettingsSO есть список List<VoxelOverlaySO> voxelOverlays
         if (settings.voxelOverlays == null || settings.voxelOverlays.Count == 0)
         {
             voxelOverlayMap = new NativeArray<VoxelOverlayDataBurst>(0, Allocator.Persistent);
@@ -178,21 +171,12 @@ public class VoxelGenerationPipeline
         }
     }
 
-    public void RequestDataGeneration(Chunk chunk) { if (!chunksToGenerateData.Contains(chunk)) chunksToGenerateData.Add(chunk); }
-    public void RequestMeshGeneration(Chunk chunk) { if (!chunksToGenerateMesh.Contains(chunk)) chunksToGenerateMesh.Add(chunk); }
-
-    public void CancelChunkGeneration(Vector3Int chunkPos)
-    {
-        chunksToGenerateData.RemoveAll(chunk => chunk.chunkPosition == chunkPos);
-        chunksToGenerateMesh.RemoveAll(chunk => chunk.chunkPosition == chunkPos);
-    }
-
     public void ProcessQueues(Vector3Int playerChunkPos, Func<Vector3Int, Chunk> getChunkCallback)
     {
         ProcessDataGenerationQueue(playerChunkPos);
         ProcessMeshGenerationQueue(playerChunkPos, getChunkCallback);
     }
-    
+
     private void ProcessDataGenerationQueue(Vector3Int playerChunkPos)
     {
         // 1. ПРОВЕРКА УСЛОВИЙ ЗАПУСКА
@@ -203,6 +187,7 @@ public class VoxelGenerationPipeline
         // Берем первый чанк из очереди для обработки
         Chunk chunkToProcess = chunksToGenerateData[0];
         chunksToGenerateData.RemoveAt(0);
+        chunkToProcess.isDataGenerated = true; // Помечаем сразу, чтобы не попасть в очередь снова
 
         // 3. СБОР ДАННЫХ О МИРЕ
         // Получаем информацию о биомах и оверлеях в зоне видимости чанка.
@@ -211,7 +196,6 @@ public class VoxelGenerationPipeline
         List<OverlayPlacementDataBurst> relevantOverlays = biomeManager.GetOverlaysInArea(chunkToProcess.chunkPosition, settings.renderDistance);
 
         // 4. ПОДГОТОВКА NATIVE-КОНТЕЙНЕРОВ ДЛЯ ДЖОБА
-    
         // 4.1. Входные данные о биомах и оверлеях
         var biomeInstancesForJob = new NativeArray<BiomeInstanceBurst>(relevantBiomes.Count, Allocator.Persistent);
         for (int i = 0; i < relevantBiomes.Count; i++)
@@ -222,7 +206,7 @@ public class VoxelGenerationPipeline
                 biomeID = instance.settings.biome.biomeID,
                 position = instance.position,
                 influenceRadius = instance.calculatedRadius,
-                contrast = instance.calculatedContrast, // Это поле можно будет использовать для более сложных переходов
+                contrast = instance.calculatedContrast,
                 blockID = instance.settings.biome.BiomeBlock.ID,
                 coreRadiusPercentage = instance.coreRadiusPercentage,
                 sharpness = instance.sharpness
@@ -258,24 +242,21 @@ public class VoxelGenerationPipeline
             finalMaterialProps = new NativeArray<float2>(voxelCount, Allocator.Persistent),
             finalGapWidths = new NativeArray<float>(voxelCount, Allocator.Persistent),
             finalBevelData = new NativeArray<float3>(voxelCount, Allocator.Persistent),
-            // Сохраняем и контейнеры с данными о биомах/оверлеях, чтобы освободить их после завершения
-            BiomeInstances = biomeInstancesForJob, // Это поле нужно добавить в AsyncChunkDataRequest
-            OverlayPlacements = overlayPlacementsForJob, // И это тоже
+            BiomeInstances = biomeInstancesForJob,
+            OverlayPlacements = overlayPlacementsForJob,
         };
 
         // 5. ИНИЦИАЛИЗАЦИЯ И ЗАПУСК ДЖОБА
         var job = new GenerationJob
         {
-            // --- Входные данные (ReadOnly) ---
             chunkPosition = chunkToProcess.chunkPosition,
             heightMapNoise = heightNoise,
             biomeInstances = biomeInstancesForJob,
             overlayPlacements = overlayPlacementsForJob,
             voxelTypeMap = this.voxelTypeMap,
             voxelOverlayMap = this.voxelOverlayMap,
-            atlasTileSize = new float2(16, 16), // Размер одного тайла в атласе
-
-            // --- Выходные данные (WriteOnly) ---
+            globalBiomeBlockID = settings.globalBiomeBlock.ID,
+            atlasSizeInTiles = new float2(settings.atlasSizeInTiles.x, settings.atlasSizeInTiles.y),
             primaryBlockIDs = request.primaryBlockIDs,
             finalColors = request.finalColors,
             finalUv0s = request.finalUv0s,
@@ -291,146 +272,149 @@ public class VoxelGenerationPipeline
         request.JobHandle = job.Schedule();
         runningDataJobs.Add(request);
     }
-    
+
     /// <summary>
-/// Обрабатывает очередь чанков, ожидающих генерации меша.
-/// </summary>
-/// <param name="playerChunkPos">Позиция чанка игрока (для возможной сортировки в будущем)</param>
-/// <param name="getChunkCallback">Функция для получения экземпляра чанка по его координатам</param>
-private void ProcessMeshGenerationQueue(Vector3Int playerChunkPos, Func<Vector3Int, Chunk> getChunkCallback)
-{
-    // 1. ПРОВЕРКА УСЛОВИЙ ЗАПУСКА
-    if (runningMeshJobs.Count >= SystemInfo.processorCount || chunksToGenerateMesh.Count == 0)
+    /// Обрабатывает очередь чанков, ожидающих генерации меша.
+    /// </summary>
+    /// <param name="playerChunkPos">Позиция чанка игрока (для возможной сортировки в будущем)</param>
+    /// <param name="getChunkCallback">Функция для получения экземпляра чанка по его координатам</param>
+    private void ProcessMeshGenerationQueue(Vector3Int playerChunkPos, Func<Vector3Int, Chunk> getChunkCallback)
     {
-        return;
-    }
-
-    // 2. ПРОВЕРКА ГОТОВНОСТИ СОСЕДЕЙ
-    // Мы не можем просто взять первый чанк. Сначала нужно убедиться, что его соседи готовы.
-    // Мы ищем в очереди первый чанк, у которого все соседи уже сгенерировали свои данные.
-    Chunk chunkToProcess = null;
-    int chunkIndexInQueue = -1;
-
-    for (int i = 0; i < chunksToGenerateMesh.Count; i++)
-    {
-        var potentialChunk = chunksToGenerateMesh[i];
-        
-        // Сам чанк должен быть готов
-        if (!potentialChunk.isDataGenerated) continue;
-        
-        // Получаем всех четырех горизонтальных соседей
-        Chunk nPosX = getChunkCallback(potentialChunk.chunkPosition + Vector3Int.right);
-        Chunk nNegX = getChunkCallback(potentialChunk.chunkPosition + Vector3Int.left);
-        Chunk nPosZ = getChunkCallback(potentialChunk.chunkPosition + Vector3Int.forward);
-        Chunk nNegZ = getChunkCallback(potentialChunk.chunkPosition + Vector3Int.back);
-
-        // Сосед считается "готовым" если он либо не существует (край мира), либо у него сгенерированы данные.
-        bool allNeighborsReady = 
-            (nPosX == null || nPosX.isDataGenerated) &&
-            (nNegX == null || nNegX.isDataGenerated) &&
-            (nPosZ == null || nPosZ.isDataGenerated) &&
-            (nNegZ == null || nNegZ.isDataGenerated);
-        
-        if (allNeighborsReady)
+        // 1. ПРОВЕРКА УСЛОВИЙ ЗАПУСКА
+        if (runningMeshJobs.Count >= settings.maxMeshJobsPerFrame || chunksToGenerateMesh.Count == 0)
         {
-            chunkToProcess = potentialChunk;
-            chunkIndexInQueue = i;
-            break; // Нашли подходящий чанк, выходим из цикла
+            return;
         }
+
+        // 2. ПРОВЕРКА ГОТОВНОСТИ СОСЕДЕЙ
+        // Мы не можем просто взять первый чанк. Сначала нужно убедиться, что его соседи готовы.
+        // Мы ищем в очереди первый чанк, у которого все соседи уже сгенерировали свои данные.
+        Chunk chunkToProcess = null;
+        int chunkIndexInQueue = -1;
+
+        for (int i = 0; i < chunksToGenerateMesh.Count; i++)
+        {
+            var potentialChunk = chunksToGenerateMesh[i];
+            // Сам чанк должен быть готов
+            if (!potentialChunk.isDataGenerated) continue;
+
+            // Получаем всех четырех горизонтальных соседей
+            Chunk nPosX = getChunkCallback(potentialChunk.chunkPosition + Vector3Int.right);
+            Chunk nNegX = getChunkCallback(potentialChunk.chunkPosition + Vector3Int.left);
+            Chunk nPosZ = getChunkCallback(potentialChunk.chunkPosition + Vector3Int.forward);
+            Chunk nNegZ = getChunkCallback(potentialChunk.chunkPosition + Vector3Int.back);
+
+            // Сосед считается "готовым" если он либо не существует (край мира), либо у него сгенерированы данные.
+            bool allNeighborsReady =
+                (nPosX == null || nPosX.isDataGenerated) &&
+                (nNegX == null || nNegX.isDataGenerated) &&
+                (nPosZ == null || nPosZ.isDataGenerated) &&
+                (nNegZ == null || nNegZ.isDataGenerated);
+
+            if (allNeighborsReady)
+            {
+                chunkToProcess = potentialChunk;
+                chunkIndexInQueue = i;
+                break; // Нашли подходящий чанк, выходим из цикла
+            }
+        }
+
+        // Если не нашли ни одного готового чанка, выходим и ждем следующего кадра.
+        if (chunkToProcess == null)
+        {
+            return;
+        }
+
+        // Удаляем выбранный чанк из очереди
+        chunksToGenerateMesh.RemoveAt(chunkIndexInQueue);
+        chunkToProcess.isMeshGenerated = true; // Помечаем, чтобы не добавить в очередь снова
+
+        // 3. ПОДГОТОВКА ДАННЫХ ДЛЯ ДЖОБА
+        // Создаем обертку для запроса. Она будет владеть всеми Native-контейнерами для этого джоба.
+        var request = new AsyncChunkMeshRequest
+        {
+            TargetChunk = chunkToProcess,
+
+            // 3.1. Копируем данные самого чанка в NativeArray
+            primaryBlockIDs = new NativeArray<ushort>(chunkToProcess.primaryBlockIDs, Allocator.Persistent),
+            overlayIDs = new NativeArray<ushort>(chunkToProcess.overlayIDs, Allocator.Persistent),
+            finalColors = new NativeArray<Color32>(chunkToProcess.finalColors, Allocator.Persistent),
+            finalUv0s = new NativeArray<float2>(chunkToProcess.finalUv0s, Allocator.Persistent),
+            finalUv1s = new NativeArray<float2>(chunkToProcess.finalUv1s, Allocator.Persistent),
+            finalTexBlends = new NativeArray<float>(chunkToProcess.finalTexBlends, Allocator.Persistent),
+            finalEmissionData = new NativeArray<float4>(chunkToProcess.finalEmissionData, Allocator.Persistent),
+            finalGapColors = new NativeArray<float4>(chunkToProcess.finalGapColors, Allocator.Persistent),
+            finalMaterialProps = new NativeArray<float2>(chunkToProcess.finalMaterialProps, Allocator.Persistent),
+            finalGapWidths = new NativeArray<float>(chunkToProcess.finalGapWidths, Allocator.Persistent),
+            finalBevelData = new NativeArray<float3>(chunkToProcess.finalBevelData, Allocator.Persistent),
+
+            voxelTypeMap = new NativeArray<VoxelTypeDataBurst>(this.voxelTypeMap, Allocator.Persistent),
+            voxelOverlayMap = new NativeArray<VoxelOverlayDataBurst>(this.voxelOverlayMap, Allocator.Persistent),
+
+            // 3.2. Копируем данные о соседях
+            
+            NeighborPosX = GetNeighborData(getChunkCallback, chunkToProcess.chunkPosition + Vector3Int.right),
+            NeighborNegX = GetNeighborData(getChunkCallback, chunkToProcess.chunkPosition + Vector3Int.left),
+            NeighborPosZ = GetNeighborData(getChunkCallback, chunkToProcess.chunkPosition + Vector3Int.forward),
+            NeighborNegZ = GetNeighborData(getChunkCallback, chunkToProcess.chunkPosition + Vector3Int.back),
+
+            // 3.3. Создаем выходные контейнеры для результатов работы джоба
+            Vertices = new NativeList<Vertex>(Allocator.Persistent),
+            Triangles = new NativeList<int>(Allocator.Persistent)
+        };
+
+        // 4. ИНИЦИАЛИЗАЦИЯ И ЗАПУСК ДЖОБА
+        var job = new MeshingJob
+        {
+            atlasTileSize = new float2(settings.atlasSizeInTiles.x, settings.atlasSizeInTiles.y),
+            primaryBlockIDs = request.primaryBlockIDs,
+            overlayIDs = request.overlayIDs,
+            finalColors = request.finalColors,
+            finalUv0s = request.finalUv0s,
+            finalUv1s = request.finalUv1s,
+            finalTexBlends = request.finalTexBlends,
+            finalEmissionData = request.finalEmissionData,
+            finalGapColors = request.finalGapColors,
+            finalMaterialProps = request.finalMaterialProps,
+            finalGapWidths = request.finalGapWidths,
+            finalBevelData = request.finalBevelData,
+
+            neighborVoxelsPosX = request.NeighborPosX,
+            neighborVoxelsNegX = request.NeighborNegX,
+            neighborVoxelsPosZ = request.NeighborPosZ,
+            neighborVoxelsNegZ = request.NeighborNegZ,
+
+            voxelTypeMap = this.voxelTypeMap,
+            voxelOverlayMap = this.voxelOverlayMap,
+
+            vertices = request.Vertices,
+            triangles = request.Triangles
+        };
+
+        request.JobHandle = job.Schedule();
+        runningMeshJobs.Add(request);
     }
 
-    // Если не нашли ни одного готового чанка, выходим и ждем следующего кадра.
-    if (chunkToProcess == null)
+    /// <summary>
+    /// Вспомогательный метод для получения данных о соседнем чанке.
+    /// </summary>
+    /// <returns>NativeArray с ID вокселей соседа или пустой массив, если соседа нет.</returns>
+    private NativeArray<ushort> GetNeighborData(Func<Vector3Int, Chunk> getChunkCallback, Vector3Int neighborPos)
     {
-        return;
-    }
-
-    // Удаляем выбранный чанк из очереди
-    chunksToGenerateMesh.RemoveAt(chunkIndexInQueue);
-    chunkToProcess.isMeshGenerated = true; // Помечаем, чтобы не добавить в очередь снова
-
-    // 3. ПОДГОТОВКА ДАННЫХ ДЛЯ ДЖОБА
-    // Создаем обертку для запроса. Она будет владеть всеми Native-контейнерами для этого джоба.
-    var request = new AsyncChunkMeshRequest
-    {
-        TargetChunk = chunkToProcess,
-        
-        // 3.1. Копируем данные самого чанка в NativeArray
-        primaryBlockIDs = new NativeArray<ushort>(chunkToProcess.primaryBlockIDs, Allocator.Persistent),
-        finalColors = new NativeArray<Color32>(chunkToProcess.finalColors, Allocator.Persistent),
-        finalUv0s = new NativeArray<float2>(chunkToProcess.finalUv0s, Allocator.Persistent),
-        finalUv1s = new NativeArray<float2>(chunkToProcess.finalUv1s, Allocator.Persistent),
-        finalTexBlends = new NativeArray<float>(chunkToProcess.finalTexBlends, Allocator.Persistent),
-        finalEmissionData = new NativeArray<float4>(chunkToProcess.finalEmissionData, Allocator.Persistent),
-        finalGapColors = new NativeArray<float4>(chunkToProcess.finalGapColors, Allocator.Persistent),
-        finalMaterialProps = new NativeArray<float2>(chunkToProcess.finalMaterialProps, Allocator.Persistent),
-        finalGapWidths = new NativeArray<float>(chunkToProcess.finalGapWidths, Allocator.Persistent),
-        finalBevelData = new NativeArray<float3>(chunkToProcess.finalBevelData, Allocator.Persistent),
-
-        // 3.2. Копируем данные о соседях
-        NeighborPosX = GetNeighborData(getChunkCallback, chunkToProcess.chunkPosition + Vector3Int.right),
-        NeighborNegX = GetNeighborData(getChunkCallback, chunkToProcess.chunkPosition + Vector3Int.left),
-        NeighborPosZ = GetNeighborData(getChunkCallback, chunkToProcess.chunkPosition + Vector3Int.forward),
-        NeighborNegZ = GetNeighborData(getChunkCallback, chunkToProcess.chunkPosition + Vector3Int.back),
-        
-        // 3.3. Создаем выходные контейнеры для результатов работы джоба
-        Vertices = new NativeList<Vertex>(Allocator.Persistent),
-        Triangles = new NativeList<int>(Allocator.Persistent)
-    };
-
-    // 4. ИНИЦИАЛИЗАЦИЯ И ЗАПУСК ДЖОБА
-    var job = new MeshingJob
-    {
-        // Передаем все подготовленные контейнеры в джоб
-        primaryBlockIDs = request.primaryBlockIDs,
-        finalColors = request.finalColors,
-        finalUv0s = request.finalUv0s,
-        finalUv1s = request.finalUv1s,
-        finalTexBlends = request.finalTexBlends,
-        finalEmissionData = request.finalEmissionData,
-        finalGapColors = request.finalGapColors,
-        finalMaterialProps = request.finalMaterialProps,
-        finalGapWidths = request.finalGapWidths,
-        finalBevelData = request.finalBevelData,
-        
-        neighborVoxelsPosX = request.NeighborPosX,
-        neighborVoxelsNegX = request.NeighborNegX,
-        neighborVoxelsPosZ = request.NeighborPosZ,
-        neighborVoxelsNegZ = request.NeighborNegZ,
-
-        vertices = request.Vertices,
-        triangles = request.Triangles
-    };
-
-    request.JobHandle = job.Schedule();
-    runningMeshJobs.Add(request);
-}
-
-/// <summary>
-/// Вспомогательный метод для получения данных о соседнем чанке.
-/// </summary>
-/// <returns>NativeArray с ID вокселей соседа или пустой массив, если соседа нет.</returns>
-private NativeArray<ushort> GetNeighborData(Func<Vector3Int, Chunk> getChunkCallback, Vector3Int neighborPos)
-{
-    Chunk neighbor = getChunkCallback(neighborPos);
-    if (neighbor != null && neighbor.isDataGenerated)
-    {
-        return new NativeArray<ushort>(neighbor.primaryBlockIDs, Allocator.Persistent);
-    }
-    else
-    {
-        // Если соседа нет или его данные не готовы, создаем пустой массив.
-        // MeshingJob корректно обработает это как "прозрачную" границу.
+        Chunk neighbor = getChunkCallback(neighborPos);
+        if (neighbor != null && neighbor.isDataGenerated)
+        {
+            return new NativeArray<ushort>(neighbor.primaryBlockIDs, Allocator.Persistent);
+        }
         return new NativeArray<ushort>(0, Allocator.Persistent);
     }
-}
-    
+
     public void CheckCompletedJobs(Action<Chunk> onDataReadyCallback)
     {
         CheckCompletedDataJobs(onDataReadyCallback);
         CheckCompletedMeshJobs();
     }
-    
+
     private void CheckCompletedDataJobs(Action<Chunk> onDataReadyCallback)
     {
         for (int i = runningDataJobs.Count - 1; i >= 0; i--)
@@ -440,7 +424,6 @@ private NativeArray<ushort> GetNeighborData(Func<Vector3Int, Chunk> getChunkCall
             {
                 request.JobHandle.Complete();
                 
-                // --- ИСПРАВЛЕНО: Копируем все НОВЫЕ данные из NativeArray в массивы чанка ---
                 var chunk = request.TargetChunk;
                 request.primaryBlockIDs.CopyTo(chunk.primaryBlockIDs);
                 request.finalColors.CopyTo(chunk.finalColors);
@@ -452,9 +435,7 @@ private NativeArray<ushort> GetNeighborData(Func<Vector3Int, Chunk> getChunkCall
                 request.finalMaterialProps.CopyTo(chunk.finalMaterialProps);
                 request.finalGapWidths.CopyTo(chunk.finalGapWidths);
                 request.finalBevelData.CopyTo(chunk.finalBevelData);
-
-                chunk.isDataGenerated = true;
-
+                
                 onDataReadyCallback(chunk);
                 request.Dispose();
                 runningDataJobs.RemoveAt(i);
@@ -479,7 +460,6 @@ private NativeArray<ushort> GetNeighborData(Func<Vector3Int, Chunk> getChunkCall
                         new VertexAttributeDescriptor(VertexAttribute.Normal,     VertexAttributeFormat.Float32, 3),
                         new VertexAttributeDescriptor(VertexAttribute.Tangent,    VertexAttributeFormat.Float32, 4),
                         new VertexAttributeDescriptor(VertexAttribute.Color,      VertexAttributeFormat.UNorm8,  4),
-
                         new VertexAttributeDescriptor(VertexAttribute.TexCoord0,  VertexAttributeFormat.Float32, 2), // uv0
                         new VertexAttributeDescriptor(VertexAttribute.TexCoord1,  VertexAttributeFormat.Float32, 2), // uv1
                         new VertexAttributeDescriptor(VertexAttribute.TexCoord2,  VertexAttributeFormat.Float32, 1), // texBlend
@@ -492,13 +472,10 @@ private NativeArray<ushort> GetNeighborData(Func<Vector3Int, Chunk> getChunkCall
 
                     mesh.SetVertexBufferParams(request.Vertices.Length, vertexAttributes);
                     mesh.SetIndexBufferParams(request.Triangles.Length, IndexFormat.UInt32);
-
                     mesh.SetVertexBufferData(request.Vertices.AsArray(), 0, 0, request.Vertices.Length);
                     mesh.SetIndexBufferData(request.Triangles.AsArray(), 0, 0, request.Triangles.Length);
-
                     mesh.subMeshCount = 1;
                     mesh.SetSubMesh(0, new SubMeshDescriptor(0, request.Triangles.Length));
-
                     mesh.RecalculateBounds();
                 }
 
@@ -521,8 +498,6 @@ private NativeArray<ushort> GetNeighborData(Func<Vector3Int, Chunk> getChunkCall
             request.JobHandle.Complete();
             request.DisposeAll();
         }
-
-        // --- ИСПРАВЛЕНО: Освобождаем только те карты, которые создали в конструкторе ---
         if (voxelTypeMap.IsCreated) voxelTypeMap.Dispose();
         if (voxelOverlayMap.IsCreated) voxelOverlayMap.Dispose();
     }
