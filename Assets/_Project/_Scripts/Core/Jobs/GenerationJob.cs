@@ -2,133 +2,188 @@ using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
 using UnityEngine;
+using Unity.Mathematics;
+
+// GenerationJob.cs
 
 [BurstCompile]
 public struct GenerationJob : IJob
 {
-    [ReadOnly] public Vector3Int chunkPosition;
-    [ReadOnly] public FastNoiseLite heightMapNoise;
-    [ReadOnly] public BiomeInstanceBurst neutralBiome;
+    // --- Входные данные (без изменений) ---
+    public Vector3Int chunkPosition;
+    public FastNoiseLite heightMapNoise;
     [ReadOnly] public NativeArray<BiomeInstanceBurst> biomeInstances;
-    [ReadOnly] public NativeArray<Color32> voxelIdToColorMap;
-    
-    public NativeArray<ushort> resultingVoxelIDs;
-    public NativeArray<Color32> resultingVoxelColors;
+    [ReadOnly] public ushort globalBiomeBlockID;
+    [ReadOnly] public NativeArray<VoxelCategory> voxelIdToCategoryMap;
 
-    private struct VoxelBiomeInfo
-    {
-        public ushort biomeID;
-        public ushort blockID;
-    }
-    /*private Color32 GetPixelFromAtlas(ushort voxelID)
-    {
-        if (voxelID >= voxelUvCoordinates.Length) return new Color32(255, 0, 255, 255); // Безопасность
-
-        Vector2Int tileCoord = voxelUvCoordinates[voxelID];
-        int atlasTileSize = atlasWidth / 2; // Атлас 2x2
-        int x = (int)((tileCoord.x + 0.5f) * atlasTileSize);
-        int y = (int)((tileCoord.y + 0.5f) * atlasTileSize);
-        return atlasData[y * atlasWidth + x];
-    }*/
-
+    // --- Выходные данные (без изменений) ---
+    public NativeArray<ushort> primaryBlockIDs;
+    public NativeArray<ushort> secondaryBlockIDs;
+    public NativeArray<float> blendFactors;
 
     public void Execute()
     {
-        var heights = new NativeArray<int>(Chunk.Width * Chunk.Width, Allocator.Temp);
-        var biomeInfos = new NativeArray<VoxelBiomeInfo>(Chunk.Width * Chunk.Width, Allocator.Temp);
-
         for (int x = 0; x < Chunk.Width; x++)
         {
             for (int z = 0; z < Chunk.Width; z++)
             {
-                int index2D = x * Chunk.Width + z;
-                float worldX = chunkPosition.x * Chunk.Width + x;
-                float worldZ = chunkPosition.z * Chunk.Width + z;
-                Vector2 worldPos = new Vector2(worldX, worldZ);
+                int worldX = chunkPosition.x * Chunk.Width + x;
+                int worldZ = chunkPosition.z * Chunk.Width + z;
 
-                BiomeInstanceBurst dominantBiome = neutralBiome;
+                // --- Этап 1: Рассчитываем базовую высоту ландшафта ---
+                float heightValue = heightMapNoise.GetNoise(worldX, worldZ);
+                int surfaceHeight = (int)math.remap(-1, 1, 0, Chunk.Height, heightValue);
+
+                // --- Этап 2: Находим два самых влиятельных биома в этой точке ---
+                int strongestBiomeIndex = -1;
+                int secondStrongestBiomeIndex = -1;
                 float maxInfluence = 0f;
+                float secondMaxInfluence = 0f;
+
                 for (int i = 0; i < biomeInstances.Length; i++)
                 {
-                    var biome = biomeInstances[i];
-                    float distance = Vector2.Distance(worldPos, biome.position);
-                    if (distance < biome.influenceRadius)
+                    var currentBiome = biomeInstances[i]; // Для удобства
+                    float dist = math.distance(new float2(worldX, worldZ), currentBiome.position);
+
+                    if (dist > currentBiome.influenceRadius) continue;
+
+                    float influence;
+                    float normalizedDist = dist / currentBiome.influenceRadius;
+
+                    // Проверяем, находимся ли мы внутри "ядра" биома
+                    if (normalizedDist < currentBiome.coreRadiusPercentage)
                     {
-                        float influence = 1f - (distance / biome.influenceRadius);
-                        if (influence > maxInfluence)
-                        {
-                            maxInfluence = influence;
-                            dominantBiome = biome;
-                        }
-                    }
-                }
-
-                int baseTerrainHeight = 10 + (int)(((heightMapNoise.GetNoise(worldX, worldZ) + 1f) / 2f) * 20f);
-                heights[index2D] = baseTerrainHeight;
-                biomeInfos[index2D] = new VoxelBiomeInfo
-                {
-                    biomeID = dominantBiome.biomeID,
-                    blockID = dominantBiome.blockID
-                };
-            }
-        }
-        
-        const int BLEND_RADIUS = 5;
-        for (int x = 0; x < Chunk.Width; x++)
-        {
-            for (int z = 0; z < Chunk.Width; z++)
-            {
-                int index2D = x * Chunk.Width + z;
-                int terrainHeight = heights[index2D];
-                VoxelBiomeInfo mainBiomeInfo = biomeInfos[index2D];
-
-                float minDistanceSq = BLEND_RADIUS * BLEND_RADIUS + 1;
-                VoxelBiomeInfo closestOtherBiomeInfo = mainBiomeInfo; 
-
-                for (int nx = -BLEND_RADIUS; nx <= BLEND_RADIUS; nx++)
-                for (int nz = -BLEND_RADIUS; nz <= BLEND_RADIUS; nz++)
-                {
-                    int checkX = x + nx;
-                    int checkZ = z + nz;
-                    if (checkX >= 0 && checkX < Chunk.Width && checkZ >= 0 && checkZ < Chunk.Width)
-                    {
-                        var otherBiomeInfo = biomeInfos[checkX * Chunk.Width + checkZ];
-                        if (otherBiomeInfo.biomeID != mainBiomeInfo.biomeID)
-                        {
-                            float distSq = nx * nx + nz * nz;
-                            if (distSq < minDistanceSq)
-                            {
-                                minDistanceSq = distSq;
-                                closestOtherBiomeInfo = otherBiomeInfo;
-                            }
-                        }
-                    }
-                }
-
-                float blendFactor = Mathf.Sqrt(minDistanceSq) / BLEND_RADIUS;
-                blendFactor = Mathf.Clamp01(blendFactor);
-
-                for (int y = 0; y < Chunk.Height; y++)
-                {
-                    int index3D = y * (Chunk.Width * Chunk.Width) + x * Chunk.Width + z;
-                    
-                    ushort voxelIdToSet = (y > terrainHeight) ? (ushort)0 : mainBiomeInfo.blockID;
-                    resultingVoxelIDs[index3D] = voxelIdToSet;
-
-                    if (voxelIdToSet == 0)
-                    {
-                        resultingVoxelColors[index3D] = new Color32(0, 0, 0, 0);
+                        // Если да, то влияние максимально (100%), смешивания нет.
+                        influence = 1.0f;
                     }
                     else
                     {
-                        Color32 colorA = voxelIdToColorMap[voxelIdToSet];
-                        Color32 colorB = voxelIdToColorMap[closestOtherBiomeInfo.blockID];
-                        resultingVoxelColors[index3D] = Color32.Lerp(colorB, colorA, blendFactor);
+                        // Если нет, мы находимся в "зоне смешивания".
+                        // Нам нужно пересчитать наше положение от 0 до 1 внутри этой зоны.
+                        float blendZoneWidth = 1.0f - currentBiome.coreRadiusPercentage;
+
+                        // Защита от деления на ноль, если ядро занимает 100%
+                        if (blendZoneWidth < 0.0001f)
+                        {
+                            influence = 0f; // Мы за пределами ядра, значит, и за пределами биома
+                        }
+                        else
+                        {
+                            // Насколько далеко мы зашли в зону смешивания
+                            float distIntoBlendZone = normalizedDist - currentBiome.coreRadiusPercentage;
+
+                            // Нормализуем это расстояние (от 0 до 1)
+                            float t = distIntoBlendZone / blendZoneWidth;
+
+                            // Теперь применяем нашу формулу резкости к этому значению 't'
+                            float sharpnessExponent = 1.0f + currentBiome.sharpness * 15.0f;
+                            influence = math.pow(1.0f - t, sharpnessExponent);
+                        }
+                    }
+
+                    if (influence > maxInfluence)
+                    {
+                        secondMaxInfluence = maxInfluence;
+                        secondStrongestBiomeIndex = strongestBiomeIndex;
+                        maxInfluence = influence;
+                        strongestBiomeIndex = i;
+                    }
+                    else if (influence > secondMaxInfluence)
+                    {
+                        secondMaxInfluence = influence;
+                        secondStrongestBiomeIndex = i;
+                    }
+                }
+
+                // --- Этап 3: ИНТЕЛЛЕКТУАЛЬНОЕ ОПРЕДЕЛЕНИЕ БЛОКОВ И СМЕШИВАНИЯ ---
+                ushort primaryBlockId;
+                ushort secondaryBlockId;
+                float blendFactor;
+
+                if (strongestBiomeIndex == -1)
+                {
+                    // Если никакие биомы не влияют, используем нейтральный ландшафт
+                    primaryBlockId = globalBiomeBlockID;
+                    secondaryBlockId = 0;
+                    blendFactor = 0;
+                }
+                else
+                {
+                    // Основной блок - это блок самого сильного биома
+                    primaryBlockId = biomeInstances[strongestBiomeIndex].blockID;
+
+                    // Определяем, что будет "фоном" для смешивания:
+                    // либо второй по силе биом, либо нейтральный ландшафт
+                    float neutralLandscapeInfluence = 1.0f - maxInfluence;
+                    ushort backgroundBlockId = globalBiomeBlockID;
+                    if (secondStrongestBiomeIndex != -1 && secondMaxInfluence > neutralLandscapeInfluence)
+                    {
+                        backgroundBlockId = biomeInstances[secondStrongestBiomeIndex].blockID;
+                    }
+                    
+                    // Получаем категории основного блока и фона
+                    VoxelCategory primaryCategory = voxelIdToCategoryMap[primaryBlockId];
+                    VoxelCategory backgroundCategory = voxelIdToCategoryMap[backgroundBlockId];
+
+                    // Вызываем нашу функцию с правилами, чтобы решить, смешивать ли их
+                    if (CanBiomesBlend(primaryCategory, backgroundCategory))
+                    {
+                        // РАЗРЕШАЕМ СМЕШИВАНИЕ
+                        secondaryBlockId = backgroundBlockId;
+                        if (secondStrongestBiomeIndex != -1 && secondMaxInfluence > neutralLandscapeInfluence)
+                        {
+                            blendFactor = secondMaxInfluence / (maxInfluence + secondMaxInfluence);
+                        }
+                        else
+                        {
+                            blendFactor = neutralLandscapeInfluence;
+                        }
+                    }
+                    else
+                    {
+                        // ЗАПРЕЩАЕМ СМЕШИВАНИЕ (например, Руда и Растение)
+                        secondaryBlockId = 0;
+                        blendFactor = 0;
+                    }
+                }
+
+                // --- Этап 4: Заполняем колонку вокселей вычисленными данными (без изменений) ---
+                for (int y = 0; y < Chunk.Height; y++)
+                {
+                    int voxelIndex = Chunk.GetVoxelIndex(x, y, z);
+                    if (y < surfaceHeight)
+                    {
+                        primaryBlockIDs[voxelIndex] = primaryBlockId;
+                        secondaryBlockIDs[voxelIndex] = secondaryBlockId;
+                        blendFactors[voxelIndex] = blendFactor;
+                    }
+                    else
+                    {
+                        primaryBlockIDs[voxelIndex] = 0;
+                        secondaryBlockIDs[voxelIndex] = 0;
+                        blendFactors[voxelIndex] = 0;
                     }
                 }
             }
         }
-        heights.Dispose();
-        biomeInfos.Dispose();
+    }
+
+    private bool CanBiomesBlend(VoxelCategory cat1, VoxelCategory cat2)
+    {
+        // ПРАВИЛО №1: Объекты одной категории всегда смешиваются
+        if (cat1 == cat2)
+        {
+            return true;
+        }
+
+        // ПРАВИЛО №2: Разрешаем Руде (Ore) и Кристаллам (Crystal) смешиваться с Ландшафтом (Landscape)
+        if ((cat1 == VoxelCategory.Landscape && (cat2 == VoxelCategory.Ore || cat2 == VoxelCategory.Crystal)) ||
+            (cat2 == VoxelCategory.Landscape && (cat1 == VoxelCategory.Ore || cat1 == VoxelCategory.Crystal)))
+        {
+            return true;
+        }
+
+        // Во всех остальных случаях - запрещаем смешивание (например, Постройки и Руда)
+        return false;
     }
 }

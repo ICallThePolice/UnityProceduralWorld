@@ -11,6 +11,9 @@ public class Chunk
     public readonly Vector3Int chunkPosition;
     public GameObject gameObject;
     public Color32[] voxelColors;
+    public ushort[] primaryBlockIDs;
+    public ushort[] secondaryBlockIDs;
+    public float[] blendFactors;
 
     public Mesh meshData; // Ссылка на меш, которую нужно будет очищать
 
@@ -27,6 +30,12 @@ public class Chunk
         this.voxelIDs = new ushort[Width, Height, Width];
         this.voxelColors = new Color32[Width * Height * Width];
         this.lastActiveTime = Time.time;
+    }
+
+    public static int GetVoxelIndex(int x, int y, int z)
+    {
+        // Правильная формула для "развертывания" 3D-массива [Width, Height, Width]
+        return x * Height * Width + y * Width + z;
     }
     
     // --- НОВЫЙ МЕТОД ---
@@ -46,6 +55,11 @@ public class Chunk
         }
     }
 
+    public ushort[] GetAllVoxelIDs()
+    {
+        return primaryBlockIDs;
+    }
+
     public ushort GetVoxelID(int x, int y, int z)
     {
         return voxelIDs[x, y, z];
@@ -57,11 +71,9 @@ public class Chunk
         isModifiedByPlayer = true;
     }
 
-    public ushort[] GetAllVoxelIDs()
+    public void SetPrimaryVoxelIDs(ushort[] ids)
     {
-        ushort[] flatVoxels = new ushort[Width * Height * Width];
-        Buffer.BlockCopy(voxelIDs, 0, flatVoxels, 0, flatVoxels.Length * sizeof(ushort));
-        return flatVoxels;
+        this.primaryBlockIDs = ids;
     }
 
     public void SetAllVoxelIDs(ushort[] allVoxels)

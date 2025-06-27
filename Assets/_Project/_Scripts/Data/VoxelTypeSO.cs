@@ -14,6 +14,8 @@ public class VoxelTypeSO : ScriptableObject
 
     [Tooltip("Имя, отображаемое в редакторе и, возможно, в игре.")]
     public string VoxelName;
+    [Tooltip("Категория вокселя. Используется для группировки и фильтрации типов в редакторе.")]
+    public VoxelCategory category = VoxelCategory.Landscape;
 
     [Header("Физические свойства")]
     [Tooltip("Является ли воксель твердым? Влияет на физику и генерацию меша.")]
@@ -28,5 +30,16 @@ public class VoxelTypeSO : ScriptableObject
     // Примечание: для более сложных блоков можно добавить отдельные координаты для верха, низа и боковых граней.
 
     [Tooltip("Звук, который проигрывается при разрушении этого типа вокселя.")]
-    public AudioClip destructionSound; // 
+    public AudioClip destructionSound;
+    public Color color = Color.white;
+
+    [Header("Настройки материала")]
+    public Color gapColor = new Color(0.1f, 0.1f, 0.1f, 1.0f); // Цвет швов/зазоров
+    [Range(0f, 1f)] public float smoothness = 0.5f;             // Гладкость/глянцевость
+    [Range(0f, 1f)] public float metallic = 0.0f;               // Металличность
+
+    [Header("Настройки свечения (Emission)")]
+    [ColorUsage(true, true)] // Этот атрибут даст красивый HDR-колорпикер
+    public Color emissionColor = Color.black; // По умолчанию блоки не светятся
+    public float emissionStrength = 0f;
 }

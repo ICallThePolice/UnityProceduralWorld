@@ -33,6 +33,11 @@ public class WorldController : MonoBehaviour
             return;
         }
 
+        if (generationPipeline != null)
+        {
+            generationPipeline.Dispose();
+        }
+
         // 4. Явно инициализируем BiomeManager, передавая ему нужные настройки.
         // Теперь BiomeManager не ищет WorldController, а наоборот.
         BiomeManager.Instance.Initialize(worldSettings);

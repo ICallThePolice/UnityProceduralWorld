@@ -34,4 +34,7 @@ public class WorldSettingsSO : ScriptableObject
     public NoiseSettingsSO chaosNoiseSettings;
     public NoiseSettingsSO saturationNoiseSettings;
     public NoiseSettingsSO detailNoiseSettings;
+    
+    [Header("Global Biome Settings")]
+    public VoxelTypeSO globalBiomeBlock;
 }

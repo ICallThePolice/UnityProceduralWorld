@@ -10,31 +10,39 @@ public class AsyncChunkDataRequest
 {
     public JobHandle JobHandle;
     public Chunk TargetChunk;
-    public NativeArray<ushort> VoxelIDs;
-    public NativeArray<Color32> VoxelColors;
+    public NativeArray<ushort> PrimaryBlockIDs;
+    public NativeArray<ushort> SecondaryBlockIDs;
+    public NativeArray<float> BlendFactors;
     public NativeArray<BiomeInstanceBurst> BiomeInstances;
-    
+
     public void Dispose()
     {
-        if (VoxelIDs.IsCreated) VoxelIDs.Dispose();
-        if (VoxelColors.IsCreated) VoxelColors.Dispose();
+        if (PrimaryBlockIDs.IsCreated) PrimaryBlockIDs.Dispose();
+        if (SecondaryBlockIDs.IsCreated) SecondaryBlockIDs.Dispose();
+        if (BlendFactors.IsCreated) BlendFactors.Dispose();
         if (BiomeInstances.IsCreated) BiomeInstances.Dispose();
     }
 }
+
 public class AsyncChunkMeshRequest
 {
     public JobHandle JobHandle;
     public Chunk TargetChunk;
-    public NativeArray<ushort> VoxelIDs;
-    public NativeArray<Color32> VoxelColors;
-    public NativeArray<ushort> NeighborPosX, NeighborNegX, NeighborPosZ, NeighborNegZ;
+    public NativeArray<ushort> PrimaryBlockIDs;
+    public NativeArray<ushort> SecondaryBlockIDs;
+    public NativeArray<float> BlendFactors;
+    public NativeArray<ushort> NeighborPosX;
+    public NativeArray<ushort> NeighborNegX;
+    public NativeArray<ushort> NeighborPosZ;
+    public NativeArray<ushort> NeighborNegZ;
     public NativeList<Vertex> Vertices;
     public NativeList<int> Triangles;
 
     public void DisposeAll()
     {
-        if (VoxelIDs.IsCreated) VoxelIDs.Dispose();
-        if (VoxelColors.IsCreated) VoxelColors.Dispose();
+        if (PrimaryBlockIDs.IsCreated) PrimaryBlockIDs.Dispose();
+        if (SecondaryBlockIDs.IsCreated) SecondaryBlockIDs.Dispose();
+        if (BlendFactors.IsCreated) BlendFactors.Dispose();
         if (NeighborPosX.IsCreated) NeighborPosX.Dispose();
         if (NeighborNegX.IsCreated) NeighborNegX.Dispose();
         if (NeighborPosZ.IsCreated) NeighborPosZ.Dispose();
@@ -50,7 +58,12 @@ public class VoxelGenerationPipeline
     public event Action<Chunk, Mesh> OnChunkMeshReady;
     private readonly WorldSettingsSO settings;
     private readonly BiomeManager biomeManager;
+    private NativeArray<Vector2> voxelIdToUvMap; // Карта ID -> UV
     private NativeArray<Color32> voxelIdToColorMap;
+    private NativeArray<Vector4> voxelIdToEmissionDataMap;
+    private NativeArray<Vector4> voxelIdToGapColorMap;
+    private NativeArray<Vector2> voxelIdToMaterialPropsMap;
+    private NativeArray<VoxelCategory> voxelIdToCategoryMap;
 
     private readonly List<Chunk> chunksToGenerateData = new List<Chunk>();
     private readonly List<Chunk> chunksToGenerateMesh = new List<Chunk>();
@@ -62,35 +75,42 @@ public class VoxelGenerationPipeline
         this.settings = settings;
         this.biomeManager = biomeManager;
 
-        Texture2D atlas = settings.worldMaterial.mainTexture as Texture2D;
-        if (atlas != null && atlas.isReadable)
+        ushort maxId = 0;
+        foreach (var voxelType in settings.voxelTypes)
         {
-            ushort maxId = 0;
-            foreach (var voxelType in settings.voxelTypes) { if (voxelType != null && voxelType.ID > maxId) maxId = voxelType.ID; }
-            
-            voxelIdToColorMap = new NativeArray<Color32>(maxId + 1, Allocator.Persistent);
-            var tempVoxelUvMap = new NativeArray<Vector2Int>(maxId + 1, Allocator.Temp);
-            foreach (var voxelType in settings.voxelTypes) { if (voxelType != null) tempVoxelUvMap[voxelType.ID] = voxelType.textureAtlasCoord; }
-
-            int atlasWidth = atlas.width;
-            int atlasTileSize = atlasWidth / 2;
-            Color32[] atlasPixels = atlas.GetPixels32();
-
-            for (ushort id = 0; id < voxelIdToColorMap.Length; id++)
-            {
-                if (id < tempVoxelUvMap.Length)
-                {
-                    Vector2Int tileCoord = tempVoxelUvMap[id];
-                    int x = (int)((tileCoord.x + 0.5f) * atlasTileSize);
-                    int y = (int)((tileCoord.y + 0.5f) * atlasTileSize);
-                    voxelIdToColorMap[id] = atlasPixels[y * atlasWidth + x];
-                }
-            }
-            tempVoxelUvMap.Dispose();
+            if (voxelType != null && voxelType.ID > maxId) maxId = voxelType.ID;
         }
-        else
+        
+        int arraySize = (int)maxId + 1;
+        voxelIdToUvMap = new NativeArray<Vector2>(arraySize, Allocator.Persistent);
+        voxelIdToColorMap = new NativeArray<Color32>(arraySize, Allocator.Persistent);
+        voxelIdToEmissionDataMap = new NativeArray<Vector4>(arraySize, Allocator.Persistent);
+        voxelIdToGapColorMap = new NativeArray<Vector4>(arraySize, Allocator.Persistent);
+        voxelIdToMaterialPropsMap = new NativeArray<Vector2>(arraySize, Allocator.Persistent);
+        voxelIdToCategoryMap = new NativeArray<VoxelCategory>(arraySize, Allocator.Persistent);
+
+        Vector2 atlasTileSize = new Vector2(1.0f / 2, 1.0f / 2);
+
+        if (settings.voxelTypes != null)
         {
-            Debug.LogError("Материалу мира не назначена текстура атласа, или она не помечена как Read/Write Enabled!");
+            foreach (var voxelType in settings.voxelTypes)
+            {
+                if (voxelType == null || voxelType.ID >= arraySize) continue;
+                if (voxelType.ID == 0) {
+                    voxelIdToCategoryMap[0] = voxelType.category;
+                    continue;
+                }
+                
+                Vector2 uv = new Vector2(voxelType.textureAtlasCoord.x * atlasTileSize.x, voxelType.textureAtlasCoord.y * atlasTileSize.y);
+                voxelIdToUvMap[voxelType.ID] = uv;
+                voxelIdToColorMap[voxelType.ID] = voxelType.color;
+                voxelIdToCategoryMap[voxelType.ID] = voxelType.category;
+                
+                Color emissionColor = voxelType.emissionColor;
+                voxelIdToEmissionDataMap[voxelType.ID] = new Vector4(emissionColor.r, emissionColor.g, emissionColor.b, voxelType.emissionStrength);
+                voxelIdToGapColorMap[voxelType.ID] = new Vector4(voxelType.gapColor.r, voxelType.gapColor.g, voxelType.gapColor.b, voxelType.gapColor.a);
+                voxelIdToMaterialPropsMap[voxelType.ID] = new Vector2(voxelType.smoothness, voxelType.metallic);
+            }
         }
     }
 
@@ -126,13 +146,16 @@ public class VoxelGenerationPipeline
                 biomeID = instance.settings.biome.biomeID,
                 position = instance.position,
                 influenceRadius = instance.calculatedRadius,
-                contrast = instance.calculatedContrast,
-                blockID = instance.settings.biome.BiomeBlock.ID // <-- Передаем ID единственного блока
+                contrast = instance.calculatedContrast, // Это поле можно будет использовать для более сложных переходов
+                blockID = instance.settings.biome.BiomeBlock.ID,
+                coreRadiusPercentage = instance.coreRadiusPercentage,
+                sharpness = instance.sharpness
             };
         }
 
-        var dataJobVoxelIDs = new NativeArray<ushort>(Chunk.Width * Chunk.Height * Chunk.Width, Allocator.Persistent);
-        var dataJobVoxelColors = new NativeArray<Color32>(Chunk.Width * Chunk.Height * Chunk.Width, Allocator.Persistent);
+        var primaryIDs = new NativeArray<ushort>(Chunk.Width * Chunk.Height * Chunk.Width, Allocator.Persistent);
+        var secondaryIDs = new NativeArray<ushort>(primaryIDs.Length, Allocator.Persistent);
+        var blendFactors = new NativeArray<float>(primaryIDs.Length, Allocator.Persistent);
 
         var heightNoise = new FastNoiseLite(settings.heightmapNoiseSettings.seed);
         heightNoise.SetFrequency(settings.heightmapNoiseSettings.scale);
@@ -141,20 +164,16 @@ public class VoxelGenerationPipeline
         heightNoise.SetFractalLacunarity(settings.heightmapNoiseSettings.lacunarity);
         heightNoise.SetFractalGain(settings.heightmapNoiseSettings.persistence);
 
-        var neutralBiomeBurst = new BiomeInstanceBurst
-        {
-            biomeID = settings.neutralBiome.biomeID
-        };
-
         var job = new GenerationJob
         {
             chunkPosition = chunkToProcess.chunkPosition,
             heightMapNoise = heightNoise,
-            neutralBiome = neutralBiomeBurst,
             biomeInstances = biomeInstancesForJob,
-            voxelIdToColorMap = this.voxelIdToColorMap,
-            resultingVoxelIDs = dataJobVoxelIDs,
-            resultingVoxelColors = dataJobVoxelColors
+            globalBiomeBlockID = settings.globalBiomeBlock.ID,
+            voxelIdToCategoryMap = this.voxelIdToCategoryMap,
+            primaryBlockIDs = primaryIDs,
+            secondaryBlockIDs = secondaryIDs,
+            blendFactors = blendFactors
         };
 
         var handle = job.Schedule();
@@ -162,72 +181,87 @@ public class VoxelGenerationPipeline
         {
             JobHandle = handle,
             TargetChunk = chunkToProcess,
-            VoxelIDs = dataJobVoxelIDs,
-            VoxelColors = dataJobVoxelColors,
+            PrimaryBlockIDs = primaryIDs,
+            SecondaryBlockIDs = secondaryIDs,
+            BlendFactors = blendFactors,
             BiomeInstances = biomeInstancesForJob,
         });
     }
     
     // Главный цикл обработки очереди на создание меша
     private void ProcessMeshGenerationQueue(Vector3Int playerChunkPos, Func<Vector3Int, Chunk> getChunkCallback)
+{
+    if (runningMeshJobs.Count >= SystemInfo.processorCount || chunksToGenerateMesh.Count == 0) return;
+    
+    Chunk chunkToProcess = chunksToGenerateMesh[0];
+
+    Chunk nPosX = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(1, 0, 0));
+    Chunk nNegX = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(-1, 0, 0));
+    Chunk nPosZ = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(0, 0, 1));
+    Chunk nNegZ = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(0, 0, -1));
+
+    bool allNeighborsReady = (nPosX == null || nPosX.isDataGenerated) && (nNegX == null || nNegX.isDataGenerated) && (nPosZ == null || nPosZ.isDataGenerated) && (nNegZ == null || nNegZ.isDataGenerated);
+
+    if (allNeighborsReady)
     {
-        if (runningMeshJobs.Count >= SystemInfo.processorCount || chunksToGenerateMesh.Count == 0) return;
+        chunksToGenerateMesh.RemoveAt(0);
+
+        // Создаем NativeArray-копии здесь, прямо перед запуском джоба
+        var primaryIDs = new NativeArray<ushort>(chunkToProcess.primaryBlockIDs, Allocator.Persistent);
+        var secondaryIDs = new NativeArray<ushort>(chunkToProcess.secondaryBlockIDs, Allocator.Persistent);
+        var blendFactors = new NativeArray<float>(chunkToProcess.blendFactors, Allocator.Persistent);
         
-        Chunk chunkToProcess = chunksToGenerateMesh[0];
+        // --- ИСПРАВЛЕНИЕ: Вместо GetNeighborData создаем копии здесь ---
+        var neighborDataPosX = (nPosX != null && nPosX.isDataGenerated) ? new NativeArray<ushort>(nPosX.primaryBlockIDs, Allocator.Persistent) : new NativeArray<ushort>(0, Allocator.Persistent);
+        var neighborDataNegX = (nNegX != null && nNegX.isDataGenerated) ? new NativeArray<ushort>(nNegX.primaryBlockIDs, Allocator.Persistent) : new NativeArray<ushort>(0, Allocator.Persistent);
+        var neighborDataPosZ = (nPosZ != null && nPosZ.isDataGenerated) ? new NativeArray<ushort>(nPosZ.primaryBlockIDs, Allocator.Persistent) : new NativeArray<ushort>(0, Allocator.Persistent);
+        var neighborDataNegZ = (nNegZ != null && nNegZ.isDataGenerated) ? new NativeArray<ushort>(nNegZ.primaryBlockIDs, Allocator.Persistent) : new NativeArray<ushort>(0, Allocator.Persistent);
 
-        Chunk nPosX = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(1, 0, 0));
-        Chunk nNegX = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(-1, 0, 0));
-        Chunk nPosZ = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(0, 0, 1));
-        Chunk nNegZ = getChunkCallback(chunkToProcess.chunkPosition + new Vector3Int(0, 0, -1));
+        var vertices = new NativeList<Vertex>(Allocator.Persistent);
+        var triangles = new NativeList<int>(Allocator.Persistent);
 
-        bool allNeighborsReady = (nPosX == null || nPosX.isDataGenerated) && (nNegX == null || nNegX.isDataGenerated) && (nPosZ == null || nPosZ.isDataGenerated) && (nNegZ == null || nNegZ.isDataGenerated);
-
-        if (allNeighborsReady)
+        var job = new MeshingJob
         {
-            chunksToGenerateMesh.RemoveAt(0);
-
-            var jobVoxelIDs = new NativeArray<ushort>(chunkToProcess.GetAllVoxelIDs(), Allocator.Persistent);
-            var jobVoxelColors = new NativeArray<Color32>(chunkToProcess.voxelColors, Allocator.Persistent);
-            var neighborDataPosX = GetNeighborData(nPosX);
-            var neighborDataNegX = GetNeighborData(nNegX);
-            var neighborDataPosZ = GetNeighborData(nPosZ);
-            var neighborDataNegZ = GetNeighborData(nNegZ);
-            var vertices = new NativeList<Vertex>(Allocator.Persistent);
-            var triangles = new NativeList<int>(Allocator.Persistent);
-
-            var job = new MeshingJob
-            {
-                voxelIDs = jobVoxelIDs,
-                voxelColors = jobVoxelColors,
-                hasNeighborPosX = nPosX != null,
-                hasNeighborNegX = nNegX != null,
-                hasNeighborPosZ = nPosZ != null,
-                hasNeighborNegZ = nNegZ != null,
-                neighborVoxelsPosX = neighborDataPosX,
-                neighborVoxelsNegX = neighborDataNegX,
-                neighborVoxelsPosZ = neighborDataPosZ,
-                neighborVoxelsNegZ = neighborDataNegZ,
-                vertices = vertices,
-                triangles = triangles
-            };
-
-            var handle = job.Schedule();
+            primaryBlockIDs = primaryIDs,
+            secondaryBlockIDs = secondaryIDs,
+            blendFactors = blendFactors,
             
-            runningMeshJobs.Add(new AsyncChunkMeshRequest
-            {
-                JobHandle = handle,
-                TargetChunk = chunkToProcess,
-                VoxelIDs = jobVoxelIDs,
-                VoxelColors = jobVoxelColors,
-                NeighborPosX = neighborDataPosX,
-                NeighborNegX = neighborDataNegX,
-                NeighborPosZ = neighborDataPosZ,
-                NeighborNegZ = neighborDataNegZ,
-                Vertices = vertices,
-                Triangles = triangles
-            });
-        }
+            voxelIdToCategoryMap = this.voxelIdToCategoryMap,
+            voxelIdToUvMap = this.voxelIdToUvMap,
+            voxelIdToColorMap = this.voxelIdToColorMap,
+            voxelIdToEmissionDataMap = this.voxelIdToEmissionDataMap,
+            voxelIdToGapColorMap = this.voxelIdToGapColorMap,
+            voxelIdToMaterialPropsMap = this.voxelIdToMaterialPropsMap,
+            
+            atlasTileSize = new Vector2(1.0f / 16f, 1.0f / 16f),
+            
+            neighborVoxelsPosX = neighborDataPosX,
+            neighborVoxelsNegX = neighborDataNegX,
+            neighborVoxelsPosZ = neighborDataPosZ,
+            neighborVoxelsNegZ = neighborDataNegZ,
+
+            vertices = vertices,
+            triangles = triangles
+        };
+
+        var handle = job.Schedule();
+        
+        runningMeshJobs.Add(new AsyncChunkMeshRequest
+        {
+            JobHandle = handle,
+            TargetChunk = chunkToProcess,
+            PrimaryBlockIDs = primaryIDs,
+            SecondaryBlockIDs = secondaryIDs,
+            BlendFactors = blendFactors,
+            NeighborPosX = neighborDataPosX,
+            NeighborNegX = neighborDataNegX,
+            NeighborPosZ = neighborDataPosZ,
+            NeighborNegZ = neighborDataNegZ,
+            Vertices = vertices,
+            Triangles = triangles
+        });
     }
+}
     
     public void CheckCompletedJobs(Action<Chunk> onDataReadyCallback)
     {
@@ -242,9 +276,11 @@ public class VoxelGenerationPipeline
             if (request.JobHandle.IsCompleted)
             {
                 request.JobHandle.Complete();
-                request.TargetChunk.SetAllVoxelIDs(request.VoxelIDs.ToArray());
-                request.TargetChunk.voxelColors = request.VoxelColors.ToArray();
+                request.TargetChunk.SetPrimaryVoxelIDs(request.PrimaryBlockIDs.ToArray());
+                request.TargetChunk.secondaryBlockIDs = request.SecondaryBlockIDs.ToArray();
+                request.TargetChunk.blendFactors = request.BlendFactors.ToArray();
                 request.TargetChunk.isDataGenerated = true;
+
                 onDataReadyCallback(request.TargetChunk);
                 request.Dispose();
                 runningDataJobs.RemoveAt(i);
@@ -261,14 +297,20 @@ public class VoxelGenerationPipeline
             {
                 request.JobHandle.Complete();
                 Mesh mesh = new Mesh();
-                if (request.Vertices.Length > 0)
+                if (request.Vertices.Length > 0 && request.Triangles.Length > 0)
                 {
-                    // --- ФИНАЛЬНОЕ, ПРАВИЛЬНОЕ ОПИСАНИЕ МЕША ---
-                    // "Декларация" должна ТОЧНО соответствовать структуре "коробки" Vertex
                     var vertexAttributes = new[]
                     {
-                        new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3),
-                        new VertexAttributeDescriptor(VertexAttribute.Color,    VertexAttributeFormat.UNorm8, 4)
+                        new VertexAttributeDescriptor(VertexAttribute.Position,   VertexAttributeFormat.Float32, 3),
+                        new VertexAttributeDescriptor(VertexAttribute.Normal,     VertexAttributeFormat.Float32, 3),
+                        new VertexAttributeDescriptor(VertexAttribute.Tangent,    VertexAttributeFormat.Float32, 4), // Используем Float32 для тангента
+                        new VertexAttributeDescriptor(VertexAttribute.Color,      VertexAttributeFormat.UNorm8,  4),
+                        new VertexAttributeDescriptor(VertexAttribute.TexCoord0,  VertexAttributeFormat.Float32, 2),
+                        new VertexAttributeDescriptor(VertexAttribute.TexCoord1,  VertexAttributeFormat.Float32, 2),
+                        new VertexAttributeDescriptor(VertexAttribute.TexCoord2,  VertexAttributeFormat.Float32, 1),
+                        new VertexAttributeDescriptor(VertexAttribute.TexCoord3,  VertexAttributeFormat.Float32, 4),
+                        new VertexAttributeDescriptor(VertexAttribute.TexCoord4,  VertexAttributeFormat.Float32, 4),
+                        new VertexAttributeDescriptor(VertexAttribute.TexCoord5,  VertexAttributeFormat.Float32, 2)
                     };
 
                     mesh.SetVertexBufferParams(request.Vertices.Length, vertexAttributes);
@@ -281,10 +323,6 @@ public class VoxelGenerationPipeline
                     mesh.SetSubMesh(0, new SubMeshDescriptor(0, request.Triangles.Length));
                     
                     mesh.RecalculateBounds();
-                    
-                    // Unity сама добавит нормали отдельным потоком данных,
-                    // когда мы вызовем этот метод. Шейдер их получит.
-                    mesh.RecalculateNormals();
                 }
                 
                 OnChunkMeshReady?.Invoke(request.TargetChunk, mesh);
@@ -306,12 +344,12 @@ public class VoxelGenerationPipeline
             request.JobHandle.Complete();
             request.DisposeAll();
         }
-    }
 
-    private NativeArray<ushort> GetNeighborData(Chunk neighbor)
-    {
-        if (neighbor != null && neighbor.isDataGenerated)
-            return new NativeArray<ushort>(neighbor.GetAllVoxelIDs(), Allocator.Persistent);
-        return new NativeArray<ushort>(0, Allocator.Persistent);
+        if (voxelIdToUvMap.IsCreated) voxelIdToUvMap.Dispose();
+        if (voxelIdToColorMap.IsCreated) voxelIdToColorMap.Dispose();
+        if (voxelIdToEmissionDataMap.IsCreated) voxelIdToEmissionDataMap.Dispose();
+        if (voxelIdToGapColorMap.IsCreated) voxelIdToGapColorMap.Dispose();
+        if (voxelIdToMaterialPropsMap.IsCreated) voxelIdToMaterialPropsMap.Dispose();
+        if (voxelIdToCategoryMap.IsCreated) voxelIdToCategoryMap.Dispose();
     }
 }

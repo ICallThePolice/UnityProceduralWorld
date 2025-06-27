@@ -4,8 +4,18 @@
 
 using UnityEngine;
 using System.Collections.Generic;
+using Unity.Mathematics; 
 
 // --- Перечисления (Enums) ---
+public enum VoxelCategory {
+    Landscape,   // Категория для земли, камня, песка и т.д.
+    Ore,         // Для всех видов руд
+    Crystal,     // Для кристаллов и драгоценных камней
+    Flora,       // Для растений, деревьев, грибов
+    ManMade,     // Для построек, стен, дорог
+    Liquid,      // Для воды, лавы
+    Special      // Для всего остального (порталы, барьеры и т.д.)
+}
 public enum TerrainModifier { Additive, Subtractive, Replace }
 public enum BiomeInfluenceShape { Radial, OrganicNoise }
 public enum Direction { Back, Front, Top, Bottom, Left, Right }
@@ -31,17 +41,18 @@ public interface IArtifactGenerator
     void Apply(ref VoxelStateData voxelData, in ArtifactInstanceBurst artifact, in Vector2 worldPos, int y, int baseTerrainHeight);
 }
 
-[System.Serializable]
 public struct Vertex
 {
-    public Vector3 position;
-    public Color32 color;
-
-    public Vertex(Vector3 pos, Color32 color)
-    {
-        this.position = pos;
-        this.color = color;
-    }
+    public float3 position; 
+    public float3 normal;       // <-- ДОБАВЛЕНО
+    public float4 tangent;       // 12 байт (3 * float)
+    public Color32 color;         // 4 байта
+    public float2 uv0;           // 8 байт (2 * float)
+    public float2 uv1;           // 8 байт (2 * float)
+    public float  texBlend;      // 4 байта (1 * float)
+    public float4 emissionData;  // 16 байт (4 * float)
+    public float4 gapColor;      // 16 байт (4 * float)
+    public float2 materialProps; // 8 байт (2 * float)
 }
 
 public class ArtifactInstance
@@ -65,6 +76,8 @@ public class BiomeInstance
     public float calculatedAggressiveness;
     public int calculatedTiers;
     public float calculatedContrast;
+    public float coreRadiusPercentage;
+    public float sharpness;  
     public bool isInverted;
     public float biomeHighestPoint;
     public Vector3 calculatedTierRadii;
@@ -76,6 +89,8 @@ public struct BiomeInstanceBurst
 {
     public ushort biomeID;
     public Vector2 position;
+    public float coreRadiusPercentage;
+    public float sharpness;  
     public float influenceRadius;
     public float contrast;
     public ushort blockID;

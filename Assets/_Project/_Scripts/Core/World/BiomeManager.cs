@@ -100,6 +100,8 @@ public class BiomeManager : MonoBehaviour
             settings = settings,
             calculatedRadius = Mathf.Lerp(settings.influenceRadius.x, settings.influenceRadius.y, finalProgression),
             calculatedContrast = Mathf.Lerp(settings.contrast.x, settings.contrast.y, finalProgression),
+            coreRadiusPercentage = settings.coreRadiusPercentage,
+            sharpness = settings.sharpness 
             // Остальные сложные параметры нам пока не нужны
         };
 

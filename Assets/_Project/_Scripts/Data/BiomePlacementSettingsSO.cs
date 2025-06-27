@@ -16,6 +16,13 @@ public class BiomePlacementSettingsSO : ScriptableObject
     [Tooltip("Как резко биом переходит в нейтральную зону. >1 - резче, <1 - плавнее.")]
     public Vector2 contrast = new Vector2(1.0f, 3.0f);
     [Tooltip("Диапазон радиуса влияния 'сердца' биома.")]
+
+    [Header("Blending Settings")]
+    [Range(0.0f, 1.0f)] // Ползунок от 0 до 1 в инспекторе
+    public float sharpness = 0.25f;
+    [Tooltip("Процент радиуса, занимаемый 'чистым' ядром биома, где нет смешивания.")]
+    [Range(0.0f, 1.0f)]
+    public float coreRadiusPercentage = 0.7f;
     public Vector2 influenceRadius = new Vector2(200f, 400f);
     [Tooltip("Диапазон 'агрессивности' биома.")]
     public Vector2 aggressiveness = new Vector2(0.2f, 0.8f);

@@ -13,9 +13,4 @@ MonoBehaviour:
   m_Name: Psychic_Biome
   m_EditorClassIdentifier: 
   biomeID: 4
-  SurfaceVoxel: {fileID: 11400000, guid: 2bb72f233d4e9af44a32c8473d52db1e, type: 2}
-  SubSurfaceVoxel: {fileID: 11400000, guid: 2bb72f233d4e9af44a32c8473d52db1e, type: 2}
-  MainVoxel: {fileID: 11400000, guid: 2bb72f233d4e9af44a32c8473d52db1e, type: 2}
-  SubSurfaceDepth: 3
-  terrainModificationType: 2
-  verticalDisplacementScale: 40
+  BiomeBlock: {fileID: 11400000, guid: 2bb72f233d4e9af44a32c8473d52db1e, type: 2}

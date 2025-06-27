@@ -13,9 +13,4 @@ MonoBehaviour:
   m_Name: Vital_Biome
   m_EditorClassIdentifier: 
   biomeID: 3
-  SurfaceVoxel: {fileID: 11400000, guid: e3f792cd20f37bc4582969c82a7a4f32, type: 2}
-  SubSurfaceVoxel: {fileID: 11400000, guid: 2bb72f233d4e9af44a32c8473d52db1e, type: 2}
-  MainVoxel: {fileID: 11400000, guid: 2bb72f233d4e9af44a32c8473d52db1e, type: 2}
-  SubSurfaceDepth: 3
-  terrainModificationType: 0
-  verticalDisplacementScale: 20
+  BiomeBlock: {fileID: 11400000, guid: e3f792cd20f37bc4582969c82a7a4f32, type: 2}

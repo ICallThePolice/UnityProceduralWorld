@@ -15,6 +15,6 @@ MonoBehaviour:
   ID: 0
   VoxelName: 
   isSolid: 0
-  isTransparent: 0
+  isTransparent: 1
   textureAtlasCoord: {x: 0, y: 0}
   destructionSound: {fileID: 0}
