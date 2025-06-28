@@ -45,19 +45,34 @@ CBUFFER_END
 TEXTURE2D(_MainTex);
 SAMPLER(sampler_MainTex);
 
+// ===================================================================================
+// Вспомогательная функция для отсечения пикселей в швах
+// ===================================================================================
 void ClipGaps(float3 positionWS, float3 normalWS, half gapWidth)
 {
+    // Если ширина шва нулевая, ничего не делаем для производительности
+    if (gapWidth <= 0.0)
+    {
+        return;
+    }
+
     float3 blend_weights = abs(normalWS);
     blend_weights /= (blend_weights.x + blend_weights.y + blend_weights.z);
     
-    float2 grid_uv;
+    float2 grid_uv = 0;
     if(blend_weights.x > 0.5) grid_uv = positionWS.yz;
     else if(blend_weights.y > 0.5) grid_uv = positionWS.xz;
     else grid_uv = positionWS.xy;
     
     float2 grid_pos = frac(grid_uv);
-    float2 gaps = step(gapWidth, grid_pos) * (1.0 - step(1.0 - gapWidth, grid_pos));
-    clip((1.0 - (gaps.x * gaps.y)) - 0.5);
+
+    // --- ИСПРАВЛЕНА ЛОГИКА ---
+    // Теперь мы проверяем, находится ли пиксель ВНУТРИ шва
+    if (any(grid_pos < gapWidth) || any(grid_pos > (1.0 - gapWidth)))
+    {
+        // Если да, отбрасываем его
+        clip(-1);
+    }
 }
 
 // Vert-пасс для ForwardLit, Depth, Normals
@@ -101,16 +116,21 @@ Varyings vert_shadow(Attributes IN)
 // Фрагментный шейдер для основного пасса
 half4 frag(Varyings IN) : SV_Target
 {
-    // ИСПРАВЛЕНО: Вычисляем процедурные нормали здесь, во фрагментном шейдере
+    // --- ВОЗВРАЩАЕМ ПОЛНУЮ ЛОГИКУ ---
+    
+    // 1. Вычисляем процедурную нормаль для "граненого" вида
     float3 normalWS = normalize(cross(ddy(IN.positionWS), ddx(IN.positionWS)));
 
+    // 2. Вырезаем швы
     ClipGaps(IN.positionWS, normalWS, IN.gapWidth);
 
+    // 3. Смешиваем текстуры
     half4 primaryTexture = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, IN.uv0);
     half4 secondaryTexture = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, IN.uv1);
     half4 blendedTexture = lerp(primaryTexture, secondaryTexture, IN.texBlend);
     half4 surfaceAlbedo = blendedTexture * IN.color;
     
+    // 4. Применяем Bevel (фаску/блик)
     float2 grid_uv;
     float3 blend_weights = abs(normalWS);
     blend_weights /= (blend_weights.x + blend_weights.y + blend_weights.z);
@@ -126,12 +146,14 @@ half4 frag(Varyings IN) : SV_Target
     half3 bevelColor = (IN.bevelData.z < 0) ? half3(0,0,0) : half3(1,1,1);
     half3 finalAlbedo = lerp(surfaceAlbedo.rgb, bevelColor, bevel_raw * IN.bevelData.y * abs(IN.bevelData.z));
     
+    // 5. Рассчитываем освещение
     Light mainLight = GetMainLight(IN.shadowCoord);
     half3 ambient = SampleSH(normalWS) * _AmbientStrength;
     half lambert = saturate(dot(normalWS, mainLight.direction));
     half3 diffuse = lambert * mainLight.color * mainLight.shadowAttenuation;
     half3 finalColor = (ambient + diffuse) * finalAlbedo;
 
+    // 6. Добавляем свечение
     #if _EMISSION_ON
         finalColor += IN.emissionData.rgb * IN.emissionData.a;
     #endif

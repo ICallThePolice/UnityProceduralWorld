@@ -62,32 +62,27 @@ public struct MeshingJob : IJob
         int vertexIndexOffset = vertices.Length;
         int dirIndex = (int)direction;
 
-        // Берем готовые данные для этого вокселя из входных массивов
-        Vertex baseVertexData = new Vertex
-        {
-            color = finalColors[voxelIndex],
-            normal = VoxelData.FaceNormals[dirIndex],
-            uv0 = finalUv0s[voxelIndex],
-            uv1 = finalUv1s[voxelIndex],
-            texBlend = finalTexBlends[voxelIndex],
-            emissionData = finalEmissionData[voxelIndex],
-            gapColor = finalGapColors[voxelIndex],
-            materialProps = finalMaterialProps[voxelIndex],
-            gapWidth = finalGapWidths[voxelIndex],
-            bevelData = finalBevelData[voxelIndex]
-        };
-
         // Создаем 4 вершины для грани
         for (int i = 0; i < 4; i++)
         {
-            Vertex v = baseVertexData;
-            v.position = localPos + VoxelData.FaceVertices[dirIndex * 4 + i];
+            vertices.Add(new Vertex
+            {
+                position = localPos + VoxelData.FaceVertices[dirIndex * 4 + i],
+                normal = VoxelData.FaceNormals[dirIndex],
+                
+                // ИСПРАВЛЕНО: Правильный расчет UV
+                uv0 = (finalUv0s[voxelIndex] + VoxelData.FaceUVs[i]) / atlasSizeInTiles,
+                uv1 = (finalUv1s[voxelIndex] + VoxelData.FaceUVs[i]) / atlasSizeInTiles,
 
-            // Корректируем UV для каждой из 4 вершин грани
-            v.uv0 += VoxelData.FaceUVs[i] / atlasSizeInTiles;
-            v.uv1 += VoxelData.FaceUVs[i] / atlasSizeInTiles;
-
-            vertices.Add(v);
+                // Остальные данные просто берем из готовых массивов
+                color = finalColors[voxelIndex],
+                texBlend = finalTexBlends[voxelIndex],
+                emissionData = finalEmissionData[voxelIndex],
+                gapColor = finalGapColors[voxelIndex],
+                materialProps = finalMaterialProps[voxelIndex],
+                gapWidth = finalGapWidths[voxelIndex],
+                bevelData = finalBevelData[voxelIndex]
+            });
         }
 
         triangles.Add(vertexIndexOffset);
@@ -100,35 +95,30 @@ public struct MeshingJob : IJob
 
     private bool IsVoxelTransparent(int x, int y, int z)
     {
-        // Проверка выхода за пределы чанка по высоте
         if (y < 0 || y >= Chunk.Height) return true;
-
+        
         ushort id = GetVoxelID(new int3(x, y, z));
-
-        // Воксель прозрачен, если это воздух (ID=0) или если его тип не solid
-        return (id == 0 || (id < voxelTypeMap.Length && !voxelTypeMap[id].isSolid));
+        
+        if (id == 0) return true;
+        if (id >= voxelTypeMap.Length) return false; // Безопасность
+        
+        return !voxelTypeMap[id].isSolid;
     }
 
     private ushort GetVoxelID(int3 pos)
     {
-        // Внутри текущего чанка
-        if (pos.x >= 0 && pos.x < Chunk.Width &&
-            pos.y >= 0 && pos.y < Chunk.Height &&
-            pos.z >= 0 && pos.z < Chunk.Width)
+        if (pos.x >= 0 && pos.x < Chunk.Width && pos.y >= 0 && pos.y < Chunk.Height && pos.z >= 0 && pos.z < Chunk.Width)
         {
             return primaryBlockIDs[Chunk.GetVoxelIndex(pos.x, pos.y, pos.z)];
         }
-
-        // --- ИСПРАВЛЕНО: Добавлена проверка на Length > 0 для всех соседей ---
-
-        // Соседние чанки
-        if (pos.x < 0) return (neighborVoxelsNegX.Length > 0) ? neighborVoxelsNegX[Chunk.GetVoxelIndex(Chunk.Width + pos.x, pos.y, pos.z)] : (ushort)0;
-        if (pos.x >= Chunk.Width) return (neighborVoxelsPosX.Length > 0) ? neighborVoxelsPosX[Chunk.GetVoxelIndex(pos.x - Chunk.Width, pos.y, pos.z)] : (ushort)0;
-        if (pos.z < 0) return (neighborVoxelsNegZ.Length > 0) ? neighborVoxelsNegZ[Chunk.GetVoxelIndex(pos.x, pos.y, Chunk.Width + pos.z)] : (ushort)0;
-        if (pos.z >= Chunk.Width) return (neighborVoxelsPosZ.Length > 0) ? neighborVoxelsPosZ[Chunk.GetVoxelIndex(pos.x, pos.y, pos.z - Chunk.Width)] : (ushort)0;
-        if (pos.y < 0) return (neighborVoxelsNegY.Length > 0) ? neighborVoxelsNegY[Chunk.GetVoxelIndex(pos.x, Chunk.Height + pos.y, pos.z)] : (ushort)0;
+        
+        if (pos.x < 0)           return (neighborVoxelsNegX.Length > 0) ? neighborVoxelsNegX[Chunk.GetVoxelIndex(Chunk.Width + pos.x, pos.y, pos.z)] : (ushort)0;
+        if (pos.x >= Chunk.Width)  return (neighborVoxelsPosX.Length > 0) ? neighborVoxelsPosX[Chunk.GetVoxelIndex(pos.x - Chunk.Width, pos.y, pos.z)] : (ushort)0;
+        if (pos.z < 0)           return (neighborVoxelsNegZ.Length > 0) ? neighborVoxelsNegZ[Chunk.GetVoxelIndex(pos.x, pos.y, Chunk.Width + pos.z)] : (ushort)0;
+        if (pos.z >= Chunk.Width)  return (neighborVoxelsPosZ.Length > 0) ? neighborVoxelsPosZ[Chunk.GetVoxelIndex(pos.x, pos.y, pos.z - Chunk.Width)] : (ushort)0;
+        if (pos.y < 0)           return (neighborVoxelsNegY.Length > 0) ? neighborVoxelsNegY[Chunk.GetVoxelIndex(pos.x, Chunk.Height + pos.y, pos.z)] : (ushort)0;
         if (pos.y >= Chunk.Height) return (neighborVoxelsPosY.Length > 0) ? neighborVoxelsPosY[Chunk.GetVoxelIndex(pos.x, pos.y - Chunk.Height, pos.z)] : (ushort)0;
 
-        return 0; // Возвращаем "воздух", если воксель находится за пределами всех известных данных
+        return 0;
     }
 }

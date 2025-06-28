@@ -35,9 +35,9 @@ public interface IArtifactGenerator
 
 public struct Vertex
 {
-    public float3 position;
+    public float3 position; 
+    public float3 normal;       
     public Color32 color;
-    public float3 normal; 
     public float2 uv0;
     public float2 uv1;
     public float  texBlend;
@@ -47,6 +47,7 @@ public struct Vertex
     public float  gapWidth;
     public float3 bevelData;
 }
+
 
 
 public class ArtifactInstance
@@ -106,9 +107,7 @@ public struct VoxelOverlayDataBurst
 
 public static class VoxelData
 {
-    // Позиции вершин для 6 граней вокселя (4 вертекса на грань)
     public static readonly float3[] FaceVertices = {
-        // Back, Front, Top, Bottom, Left, Right
         new float3(0, 0, 0), new float3(0, 1, 0), new float3(1, 1, 0), new float3(1, 0, 0),
         new float3(1, 0, 1), new float3(1, 1, 1), new float3(0, 1, 1), new float3(0, 0, 1),
         new float3(0, 1, 0), new float3(0, 1, 1), new float3(1, 1, 1), new float3(1, 1, 0),
@@ -121,12 +120,9 @@ public static class VoxelData
         new float3(0, 0, -1), new float3(0, 0, 1), new float3(0, 1, 0),
         new float3(0, -1, 0), new float3(-1, 0, 0), new float3(1, 0, 0)
     };
-
-    public static readonly float4[] FaceTangents = {
-        new float4(1, 0, 0, -1), new float4(-1, 0, 0, -1), new float4(1, 0, 0, 1),
-        new float4(1, 0, 0, -1), new float4(0, 0, -1, -1), new float4(0, 0, 1, -1)
-    };
     
+    // FaceUVs теперь хранит значения от 0 до 1 для одного квадрата.
+    // Масштабирование будет происходить в MeshingJob.
     public static readonly float2[] FaceUVs = {
         new float2(0, 0), new float2(0, 1), new float2(1, 1), new float2(1, 0)
     };

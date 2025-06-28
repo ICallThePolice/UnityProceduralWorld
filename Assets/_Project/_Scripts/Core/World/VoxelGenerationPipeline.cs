@@ -45,8 +45,6 @@ public class AsyncChunkMeshRequest
 {
     public JobHandle JobHandle;
     public Chunk TargetChunk;
-
-    // Входные данные для джоба мешинга
     public NativeArray<ushort> primaryBlockIDs;
     public NativeArray<Color32> finalColors;
     public NativeArray<float2> finalUv0s;
@@ -58,9 +56,6 @@ public class AsyncChunkMeshRequest
     public NativeArray<float> finalGapWidths;
     public NativeArray<float3> finalBevelData;
     public NativeArray<ushort> NeighborPosX, NeighborNegX, NeighborPosY, NeighborNegY, NeighborPosZ, NeighborNegZ;
-    public NativeArray<VoxelTypeDataBurst> voxelTypeMap;
-
-    // Выходные данные
     public NativeList<Vertex> Vertices;
     public NativeList<int> Triangles;
 
@@ -78,6 +73,8 @@ public class AsyncChunkMeshRequest
         if (finalBevelData.IsCreated) finalBevelData.Dispose();
         if (NeighborPosX.IsCreated) NeighborPosX.Dispose();
         if (NeighborNegX.IsCreated) NeighborNegX.Dispose();
+        if (NeighborPosY.IsCreated) NeighborPosY.Dispose();
+        if (NeighborNegY.IsCreated) NeighborNegY.Dispose();
         if (NeighborPosZ.IsCreated) NeighborPosZ.Dispose();
         if (NeighborNegZ.IsCreated) NeighborNegZ.Dispose();
         if (Vertices.IsCreated) Vertices.Dispose();
@@ -119,35 +116,32 @@ public class VoxelGenerationPipeline
     }
 
     private void InitializeVoxelTypeMap()
-{
-    ushort maxId = 0;
-    foreach (var voxelType in settings.voxelTypes)
     {
-        if (voxelType != null && voxelType.ID > maxId) maxId = voxelType.ID;
-    }
-
-    if (maxId == 0 && settings.voxelTypes.Count > 0 && settings.voxelTypes[0] != null)
-    {
-        maxId = settings.voxelTypes[0].ID;
-    }
-
-    voxelTypeMap = new NativeArray<VoxelTypeDataBurst>(maxId + 1, Allocator.Persistent);
-
-    foreach (var voxelType in settings.voxelTypes)
-    {
-        if (voxelType == null) continue;
-        voxelTypeMap[voxelType.ID] = new VoxelTypeDataBurst
+        if (settings.voxelTypes == null || settings.voxelTypes.Count == 0) return;
+        
+        ushort maxId = 0;
+        foreach (var voxelType in settings.voxelTypes)
         {
-            id = voxelType.ID,
-            isSolid = voxelType.isSolid,
-            baseColor = voxelType.baseColor,
-            baseUV = new float2(voxelType.textureAtlasCoord.x, voxelType.textureAtlasCoord.y),
-            gapWidth = voxelType.GapWidth,
-            gapColor = voxelType.GapColor,
-            bevelData = new float3(voxelType.BevelWidth, voxelType.BevelStrength, voxelType.BevelDirection)
-        };
+            if (voxelType != null && voxelType.ID > maxId) maxId = voxelType.ID;
+        }
+
+        voxelTypeMap = new NativeArray<VoxelTypeDataBurst>(maxId + 1, Allocator.Persistent);
+
+        foreach (var voxelType in settings.voxelTypes)
+        {
+            if (voxelType == null) continue;
+            voxelTypeMap[voxelType.ID] = new VoxelTypeDataBurst
+            {
+                id = voxelType.ID,
+                isSolid = voxelType.isSolid,
+                baseColor = voxelType.baseColor,
+                baseUV = new float2(voxelType.textureAtlasCoord.x, voxelType.textureAtlasCoord.y),
+                gapWidth = voxelType.GapWidth,
+                gapColor = voxelType.GapColor,
+                bevelData = new float3(voxelType.BevelWidth, voxelType.BevelStrength, voxelType.BevelDirection)
+            };
+        }
     }
-}
 
     private void InitializeVoxelOverlayMap()
     {
@@ -156,7 +150,7 @@ public class VoxelGenerationPipeline
             voxelOverlayMap = new NativeArray<VoxelOverlayDataBurst>(0, Allocator.Persistent);
             return;
         }
-
+        
         ushort maxId = 0;
         foreach (var overlay in settings.voxelOverlays)
         {
@@ -176,40 +170,31 @@ public class VoxelGenerationPipeline
                 overlayUV = new float2(overlay.textureAtlasCoord.x, overlay.textureAtlasCoord.y),
                 gapWidth = overlay.GapWidth,
                 gapColor = overlay.GapColor,
-                materialProps = new float2(overlay.Smoothness, overlay.Metallic), // <-- ИСПРАВЛЕНО
+                materialProps = new float2(overlay.Smoothness, overlay.Metallic),
                 emissionData = new float4(overlay.EmissionColor.r, overlay.EmissionColor.g, overlay.EmissionColor.b, overlay.EmissionStrength),
-                bevelData = new float3(overlay.BevelWidth, overlay.BevelStrength, overlay.BevelDirection) // <-- ИСПРАВЛЕНО
+                bevelData = new float3(overlay.BevelWidth, overlay.BevelStrength, overlay.BevelDirection)
             };
         }
     }
 
-    public void ProcessQueues(Vector3Int playerChunkPos, Func<Vector3Int, Chunk> getChunkCallback)
+    public void ProcessQueues(Func<Vector3Int, Chunk> getChunkCallback)
     {
-        ProcessDataGenerationQueue(playerChunkPos);
-        ProcessMeshGenerationQueue(playerChunkPos, getChunkCallback);
+        ProcessDataGenerationQueue();
+        ProcessMeshGenerationQueue(getChunkCallback);
     }
 
-    private void ProcessDataGenerationQueue(Vector3Int playerChunkPos)
+    private void ProcessDataGenerationQueue()
     {
-        // 1. ПРОВЕРКА УСЛОВИЙ ЗАПУСКА
-        // Не запускаем больше джобов, чем есть ядер процессора, и если очередь пуста
         if (runningDataJobs.Count >= SystemInfo.processorCount || chunksToGenerateData.Count == 0) return;
 
-        // 2. ВЫБОР ЧАНКА
-        // Берем первый чанк из очереди для обработки
         Chunk chunkToProcess = chunksToGenerateData[0];
         chunksToGenerateData.RemoveAt(0);
-        chunkToProcess.isDataGenerated = true; // Помечаем сразу, чтобы не попасть в очередь снова
+        chunkToProcess.isDataGenerated = true;
 
-        // 3. СБОР ДАННЫХ О МИРЕ
-        // Получаем информацию о биомах и оверлеях в зоне видимости чанка.
-        // ПРИМЕЧАНИЕ: Вам нужно будет реализовать GetOverlaysInArea в BiomeManager
         List<BiomeInstance> relevantBiomes = biomeManager.GetBiomesInArea(chunkToProcess.chunkPosition, settings.renderDistance);
         List<OverlayPlacementDataBurst> relevantOverlays = biomeManager.GetOverlaysInArea(chunkToProcess.chunkPosition, settings.renderDistance);
 
-        // 4. ПОДГОТОВКА NATIVE-КОНТЕЙНЕРОВ ДЛЯ ДЖОБА
-        // 4.1. Входные данные о биомах и оверлеях
-        var biomeInstancesForJob = new NativeArray<BiomeInstanceBurst>(relevantBiomes.Count, Allocator.Persistent);
+        var biomeInstancesForJob = new NativeArray<BiomeInstanceBurst>(relevantBiomes.Count, Allocator.TempJob);
         for (int i = 0; i < relevantBiomes.Count; i++)
         {
             var instance = relevantBiomes[i];
@@ -225,11 +210,8 @@ public class VoxelGenerationPipeline
             };
         }
 
-        var overlayPlacementsForJob = new NativeArray<OverlayPlacementDataBurst>(relevantOverlays.Count, Allocator.Persistent);
-        for (int i = 0; i < relevantOverlays.Count; i++)
-        {
-            overlayPlacementsForJob[i] = relevantOverlays[i];
-        }
+        var overlayPlacementsForJob = new NativeArray<OverlayPlacementDataBurst>(relevantOverlays.Count, Allocator.TempJob);
+        overlayPlacementsForJob.CopyFrom(relevantOverlays.ToArray());
 
         // 4.2. Настройка шума
         var heightNoise = new FastNoiseLite(settings.heightmapNoiseSettings.seed);
@@ -244,6 +226,7 @@ public class VoxelGenerationPipeline
         var request = new AsyncChunkDataRequest
         {
             TargetChunk = chunkToProcess,
+
             primaryBlockIDs = new NativeArray<ushort>(voxelCount, Allocator.Persistent),
             finalColors = new NativeArray<Color32>(voxelCount, Allocator.Persistent),
             finalUv0s = new NativeArray<float2>(voxelCount, Allocator.Persistent),
@@ -254,6 +237,7 @@ public class VoxelGenerationPipeline
             finalMaterialProps = new NativeArray<float2>(voxelCount, Allocator.Persistent),
             finalGapWidths = new NativeArray<float>(voxelCount, Allocator.Persistent),
             finalBevelData = new NativeArray<float3>(voxelCount, Allocator.Persistent),
+
             BiomeInstances = biomeInstancesForJob,
             OverlayPlacements = overlayPlacementsForJob,
         };
@@ -285,22 +269,10 @@ public class VoxelGenerationPipeline
         runningDataJobs.Add(request);
     }
 
-    /// <summary>
-    /// Обрабатывает очередь чанков, ожидающих генерации меша.
-    /// </summary>
-    /// <param name="playerChunkPos">Позиция чанка игрока (для возможной сортировки в будущем)</param>
-    /// <param name="getChunkCallback">Функция для получения экземпляра чанка по его координатам</param>
-    private void ProcessMeshGenerationQueue(Vector3Int playerChunkPos, Func<Vector3Int, Chunk> getChunkCallback)
+    private void ProcessMeshGenerationQueue(Func<Vector3Int, Chunk> getChunkCallback)
     {
-        // 1. ПРОВЕРКА УСЛОВИЙ ЗАПУСКА
-        if (runningMeshJobs.Count >= settings.maxMeshJobsPerFrame || chunksToGenerateMesh.Count == 0)
-        {
-            return;
-        }
+        if (runningMeshJobs.Count >= settings.maxMeshJobsPerFrame || chunksToGenerateMesh.Count == 0) return;
 
-        // 2. ПРОВЕРКА ГОТОВНОСТИ СОСЕДЕЙ
-        // Мы не можем просто взять первый чанк. Сначала нужно убедиться, что его соседи готовы.
-        // Мы ищем в очереди первый чанк, у которого все соседи уже сгенерировали свои данные.
         Chunk chunkToProcess = null;
         int chunkIndexInQueue = -1;
 
@@ -315,11 +287,10 @@ public class VoxelGenerationPipeline
             Chunk nNegY = getChunkCallback(potentialChunk.chunkPosition + Vector3Int.down);
             Chunk nPosZ = getChunkCallback(potentialChunk.chunkPosition + Vector3Int.forward);
             Chunk nNegZ = getChunkCallback(potentialChunk.chunkPosition + Vector3Int.back);
-
-            bool allNeighborsReady =
-                (nPosX == null || nPosX.isDataGenerated) && (nNegX == null || nNegX.isDataGenerated) &&
-                (nPosY == null || nPosY.isDataGenerated) && (nNegY == null || nNegY.isDataGenerated) &&
-                (nPosZ == null || nPosZ.isDataGenerated) && (nNegZ == null || nNegZ.isDataGenerated);
+            
+            bool allNeighborsReady = (nPosX == null || nPosX.isDataGenerated) && (nNegX == null || nNegX.isDataGenerated) &&
+                                     (nPosY == null || nPosY.isDataGenerated) && (nNegY == null || nNegY.isDataGenerated) &&
+                                     (nPosZ == null || nPosZ.isDataGenerated) && (nNegZ == null || nNegZ.isDataGenerated);
 
             if (allNeighborsReady)
             {
@@ -328,47 +299,37 @@ public class VoxelGenerationPipeline
                 break;
             }
         }
-
-        // Если не нашли ни одного готового чанка, выходим и ждем следующего кадра.
+        
         if (chunkToProcess == null) return;
 
         chunksToGenerateMesh.RemoveAt(chunkIndexInQueue);
         chunkToProcess.isMeshGenerated = true;
 
-        // 3. ПОДГОТОВКА ДАННЫХ ДЛЯ ДЖОБА
         var request = new AsyncChunkMeshRequest
         {
             TargetChunk = chunkToProcess,
+            primaryBlockIDs = new NativeArray<ushort>(chunkToProcess.primaryBlockIDs, Allocator.TempJob),
+            finalColors = new NativeArray<Color32>(chunkToProcess.finalColors, Allocator.TempJob),
+            finalUv0s = new NativeArray<float2>(chunkToProcess.finalUv0s, Allocator.TempJob),
+            finalUv1s = new NativeArray<float2>(chunkToProcess.finalUv1s, Allocator.TempJob),
+            finalTexBlends = new NativeArray<float>(chunkToProcess.finalTexBlends, Allocator.TempJob),
+            finalEmissionData = new NativeArray<float4>(chunkToProcess.finalEmissionData, Allocator.TempJob),
+            finalGapColors = new NativeArray<float4>(chunkToProcess.finalGapColors, Allocator.TempJob),
+            finalMaterialProps = new NativeArray<float2>(chunkToProcess.finalMaterialProps, Allocator.TempJob),
+            finalGapWidths = new NativeArray<float>(chunkToProcess.finalGapWidths, Allocator.TempJob),
+            finalBevelData = new NativeArray<float3>(chunkToProcess.finalBevelData, Allocator.TempJob),
 
-            primaryBlockIDs = new NativeArray<ushort>(chunkToProcess.primaryBlockIDs, Allocator.Persistent),
-            finalColors = new NativeArray<Color32>(chunkToProcess.finalColors, Allocator.Persistent),
-            finalUv0s = new NativeArray<float2>(chunkToProcess.finalUv0s, Allocator.Persistent),
-            finalUv1s = new NativeArray<float2>(chunkToProcess.finalUv1s, Allocator.Persistent),
-            finalTexBlends = new NativeArray<float>(chunkToProcess.finalTexBlends, Allocator.Persistent),
-            finalEmissionData = new NativeArray<float4>(chunkToProcess.finalEmissionData, Allocator.Persistent),
-            finalGapColors = new NativeArray<float4>(chunkToProcess.finalGapColors, Allocator.Persistent),
-            finalMaterialProps = new NativeArray<float2>(chunkToProcess.finalMaterialProps, Allocator.Persistent),
-            
-            // --- ДОБАВЛЕНО ---
-            finalGapWidths = new NativeArray<float>(chunkToProcess.finalGapWidths, Allocator.Persistent),
-            finalBevelData = new NativeArray<float3>(chunkToProcess.finalBevelData, Allocator.Persistent),
-            // -----------------
-
-            // Данные о соседях
             NeighborPosX = GetNeighborData(getChunkCallback, chunkToProcess.chunkPosition + Vector3Int.right),
             NeighborNegX = GetNeighborData(getChunkCallback, chunkToProcess.chunkPosition + Vector3Int.left),
             NeighborPosY = GetNeighborData(getChunkCallback, chunkToProcess.chunkPosition + Vector3Int.up),
             NeighborNegY = GetNeighborData(getChunkCallback, chunkToProcess.chunkPosition + Vector3Int.down),
             NeighborPosZ = GetNeighborData(getChunkCallback, chunkToProcess.chunkPosition + Vector3Int.forward),
             NeighborNegZ = GetNeighborData(getChunkCallback, chunkToProcess.chunkPosition + Vector3Int.back),
-            
-            voxelTypeMap = this.voxelTypeMap,
 
             Vertices = new NativeList<Vertex>(Allocator.Persistent),
             Triangles = new NativeList<int>(Allocator.Persistent)
         };
 
-        // 4. ИНИЦИАЛИЗАЦИЯ И ЗАПУСК ДЖОБА
         var job = new MeshingJob
         {
             primaryBlockIDs = request.primaryBlockIDs,
@@ -379,43 +340,32 @@ public class VoxelGenerationPipeline
             finalEmissionData = request.finalEmissionData,
             finalGapColors = request.finalGapColors,
             finalMaterialProps = request.finalMaterialProps,
-            
-            // --- ДОБАВЛЕНО ---
             finalGapWidths = request.finalGapWidths,
             finalBevelData = request.finalBevelData,
-            // -----------------
-
             neighborVoxelsPosX = request.NeighborPosX,
             neighborVoxelsNegX = request.NeighborNegX,
             neighborVoxelsPosY = request.NeighborPosY,
             neighborVoxelsNegY = request.NeighborNegY,
             neighborVoxelsPosZ = request.NeighborPosZ,
             neighborVoxelsNegZ = request.NeighborNegZ,
-            
-            voxelTypeMap = request.voxelTypeMap,
-
+            voxelTypeMap = this.voxelTypeMap,
+            atlasSizeInTiles = new float2(settings.atlasSizeInTiles.x, settings.atlasSizeInTiles.y),
             vertices = request.Vertices,
-            triangles = request.Triangles,
-            
-            atlasSizeInTiles = new float2(settings.atlasSizeInTiles.x, settings.atlasSizeInTiles.y)
+            triangles = request.Triangles
         };
 
         request.JobHandle = job.Schedule();
         runningMeshJobs.Add(request);
     }
 
-    /// <summary>
-    /// Вспомогательный метод для получения данных о соседнем чанке.
-    /// </summary>
-    /// <returns>NativeArray с ID вокселей соседа или пустой массив, если соседа нет.</returns>
     private NativeArray<ushort> GetNeighborData(Func<Vector3Int, Chunk> getChunkCallback, Vector3Int neighborPos)
     {
         Chunk neighbor = getChunkCallback(neighborPos);
         if (neighbor != null && neighbor.isDataGenerated)
         {
-            return new NativeArray<ushort>(neighbor.primaryBlockIDs, Allocator.Persistent);
+            return new NativeArray<ushort>(neighbor.primaryBlockIDs, Allocator.TempJob);
         }
-        return new NativeArray<ushort>(0, Allocator.Persistent);
+        return new NativeArray<ushort>(0, Allocator.TempJob); // Пустой массив для отсутствующего соседа
     }
 
     public void CheckCompletedJobs(Action<Chunk> onDataReadyCallback)
@@ -461,33 +411,28 @@ public class VoxelGenerationPipeline
             {
                 request.JobHandle.Complete();
                 Mesh mesh = new Mesh();
-                
-                // Если вершин нет, создаем пустой меш, чтобы избежать ошибок
+
                 if (request.Vertices.Length > 0 && request.Triangles.Length > 0)
                 {
-                    // --- ИСПРАВЛЕНО: Вот та самая "инструкция" для Unity ---
-                    // Теперь она точно соответствует нашей структуре Vertex в C#
                     var vertexAttributes = new[]
                     {
-                        new VertexAttributeDescriptor(VertexAttribute.Position,  VertexAttributeFormat.Float32, 3),
-                        new VertexAttributeDescriptor(VertexAttribute.Normal,    VertexAttributeFormat.Float32, 3),
-                        new VertexAttributeDescriptor(VertexAttribute.Color,     VertexAttributeFormat.UNorm8,  4),
-                        new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.Float32, 2), // uv0
-                        new VertexAttributeDescriptor(VertexAttribute.TexCoord1, VertexAttributeFormat.Float32, 2), // uv1
-                        new VertexAttributeDescriptor(VertexAttribute.TexCoord2, VertexAttributeFormat.Float32, 1), // texBlend
-                        new VertexAttributeDescriptor(VertexAttribute.TexCoord3, VertexAttributeFormat.Float32, 4), // emissionData
-                        new VertexAttributeDescriptor(VertexAttribute.TexCoord4, VertexAttributeFormat.Float32, 4), // gapColor
-                        new VertexAttributeDescriptor(VertexAttribute.TexCoord5, VertexAttributeFormat.Float32, 2), // materialProps
-                        new VertexAttributeDescriptor(VertexAttribute.TexCoord6, VertexAttributeFormat.Float32, 1), // gapWidth
-                        new VertexAttributeDescriptor(VertexAttribute.TexCoord7, VertexAttributeFormat.Float32, 3)  // bevelData
+                        new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3),
+                        new VertexAttributeDescriptor(VertexAttribute.Normal, VertexAttributeFormat.Float32, 3),
+                        new VertexAttributeDescriptor(VertexAttribute.Color, VertexAttributeFormat.UNorm8, 4),
+                        new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.Float32, 2),
+                        new VertexAttributeDescriptor(VertexAttribute.TexCoord1, VertexAttributeFormat.Float32, 2),
+                        new VertexAttributeDescriptor(VertexAttribute.TexCoord2, VertexAttributeFormat.Float32, 1),
+                        new VertexAttributeDescriptor(VertexAttribute.TexCoord3, VertexAttributeFormat.Float32, 4),
+                        new VertexAttributeDescriptor(VertexAttribute.TexCoord4, VertexAttributeFormat.Float32, 4),
+                        new VertexAttributeDescriptor(VertexAttribute.TexCoord5, VertexAttributeFormat.Float32, 2),
+                        new VertexAttributeDescriptor(VertexAttribute.TexCoord6, VertexAttributeFormat.Float32, 1),
+                        new VertexAttributeDescriptor(VertexAttribute.TexCoord7, VertexAttributeFormat.Float32, 3)
                     };
 
                     mesh.SetVertexBufferParams(request.Vertices.Length, vertexAttributes);
                     mesh.SetIndexBufferParams(request.Triangles.Length, IndexFormat.UInt32);
-                    
                     mesh.SetVertexBufferData(request.Vertices.AsArray(), 0, 0, request.Vertices.Length);
                     mesh.SetIndexBufferData(request.Triangles.AsArray(), 0, 0, request.Triangles.Length);
-                    
                     mesh.subMeshCount = 1;
                     mesh.SetSubMesh(0, new SubMeshDescriptor(0, request.Triangles.Length));
                     mesh.RecalculateBounds();

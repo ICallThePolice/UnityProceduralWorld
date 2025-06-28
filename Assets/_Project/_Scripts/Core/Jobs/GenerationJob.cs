@@ -62,16 +62,14 @@ public struct GenerationJob : IJob
                     if (y >= surfaceHeight)
                     {
                         primaryBlockIDs[voxelIndex] = 0;
-                        // Можно не обнулять остальные, они просто не будут использоваться
                         continue;
                     }
                     
                     primaryBlockIDs[voxelIndex] = props.landscapeData.id;
                     finalColors[voxelIndex] = Color.Lerp(props.landscapeData.baseColor, props.overlayData.tintColor, props.overlayInfluence);
-                    finalUv0s[voxelIndex] = props.landscapeData.baseUV / atlasSizeInTiles;
-                    finalUv1s[voxelIndex] = props.overlayData.id > 0 ? (props.overlayData.overlayUV / atlasSizeInTiles) : float2.zero;
+                    finalUv0s[voxelIndex] = props.landscapeData.baseUV; // UV теперь не делим здесь
+                    finalUv1s[voxelIndex] = props.overlayData.id > 0 ? props.overlayData.overlayUV : float2.zero;
                     finalTexBlends[voxelIndex] = props.overlayInfluence;
-
                     finalEmissionData[voxelIndex] = math.lerp(float4.zero, props.overlayData.emissionData, props.overlayInfluence);
                     
                     float4 landscapeGapColor = new float4(props.landscapeData.gapColor.r / 255f, props.landscapeData.gapColor.g / 255f, props.landscapeData.gapColor.b / 255f, 1);
@@ -80,8 +78,7 @@ public struct GenerationJob : IJob
                     
                     finalGapWidths[voxelIndex] = math.lerp(props.landscapeData.gapWidth, props.overlayData.gapWidth, props.overlayInfluence);
                     finalBevelData[voxelIndex] = math.lerp(props.landscapeData.bevelData, props.overlayData.bevelData, props.overlayInfluence);
-
-                    finalMaterialProps[voxelIndex] = props.overlayData.id > 0 ? props.overlayData.materialProps : new float2(0.1f, 0f);
+                    finalMaterialProps[voxelIndex] = math.lerp(new float2(0.1f, 0f), props.overlayData.materialProps, props.overlayInfluence);
                 }
             }
         }
@@ -145,9 +142,11 @@ public struct GenerationJob : IJob
 
         for (int i = 0; i < overlayPlacements.Length; i++)
         {
-            float dist = math.distance(worldPos, overlayPlacements[i].position);
-            if (dist > overlayPlacements[i].radius) continue;
-            var overlayProps = voxelOverlayMap[overlayPlacements[i].overlayID];
+            var placement = overlayPlacements[i];
+            float dist = math.distance(worldPos, placement.position);
+            if (dist > placement.radius) continue;
+
+            var overlayProps = voxelOverlayMap[placement.overlayID];
             if (overlayProps.priority > maxPriority)
             {
                 maxPriority = overlayProps.priority;
@@ -181,11 +180,12 @@ public struct GenerationJob : IJob
         
         return new VoxelTypeDataBurst {
             id = a.id,
+            isSolid = a.isSolid,
             baseColor = Color32.Lerp(a.baseColor, b.baseColor, t),
             baseUV = a.baseUV,
             gapWidth = math.lerp(a.gapWidth, b.gapWidth, t),
             gapColor = Color32.Lerp(a.gapColor, b.gapColor, t),
-            bevelData = math.lerp(a.bevelData, b.bevelData, t) // --- ДОБАВЛЕНО смешивание Bevel ---
+            bevelData = math.lerp(a.bevelData, b.bevelData, t)
         };
     }
 }

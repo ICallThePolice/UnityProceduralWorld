@@ -43,9 +43,10 @@ public class WorldController : MonoBehaviour
             var playerChunkPosition = GetChunkPositionFromWorldPos(player.position);
             chunkManager.Update(playerChunkPosition);
         }
-
-        var currentChunkPos = GetChunkPositionFromWorldPos(player.position);
-        generationPipeline.ProcessQueues(currentChunkPos, chunkManager.GetChunk);
+        
+        // ИСПРАВЛЕНО: Убраны лишние аргументы. Теперь передаем только коллбэк для получения чанка.
+        generationPipeline.ProcessQueues(chunkManager.GetChunk);
+        
         generationPipeline.CheckCompletedJobs(chunkManager.OnChunkDataReady);
     }
 
