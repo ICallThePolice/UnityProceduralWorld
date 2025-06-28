@@ -13,12 +13,13 @@ MonoBehaviour:
   m_Name: Vital_Placement
   m_EditorClassIdentifier: 
   biome: {fileID: 11400000, guid: 4e13bc2e527807d418b25f9608157ffb, type: 2}
-  minDistanceBetweenBiomes: 256
+  minDistanceBetweenBiomes: 60
   neutralZoneRadius: 40
   contrast: {x: 1.5, y: 5}
+  sharpness: 0.25
+  coreRadiusPercentage: 0.7
   influenceRadius: {x: 64, y: 256}
   aggressiveness: {x: 0.5, y: 1}
   maxTiers: {x: 1, y: 3}
   inversionChance: 0.25
-  childArtifacts:
-  - {fileID: 11400000, guid: 55ada473693c34d49a24122adfcc6646, type: 2}
+  tierPlacementRadii: {x: 0.4, y: 0.7, z: 1}

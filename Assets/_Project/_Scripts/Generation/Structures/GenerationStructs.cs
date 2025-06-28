@@ -64,19 +64,45 @@ public class ArtifactInstance
 
 public class BiomeInstance
 {
-    public Vector2 position;
+    public float2 position;
     public BiomePlacementSettingsSO settings;
     // Динамически рассчитанные параметры
     public float calculatedRadius;
-    public float calculatedAggressiveness;
-    public int calculatedTiers;
     public float calculatedContrast;
     public float coreRadiusPercentage;
-    public float sharpness;  
+    public float sharpness;
+    public float calculatedAggressiveness;
+    public int calculatedTiers;
     public bool isInverted;
     public float biomeHighestPoint;
     public Vector3 calculatedTierRadii;
-    public List<ArtifactInstance> childArtifacts = new List<ArtifactInstance>(); 
+    public List<ArtifactInstance> childArtifacts = new List<ArtifactInstance>();
+}
+
+// Описывает один кластер
+public struct ClusterInfoBurst
+{
+    public ushort blockID;
+    public float influenceRadius;
+    public float contrast;
+    public float coreRadiusPercentage;
+    public int nodeStartIndex;
+    public int nodeCount;
+    public int edgeStartIndex;
+    public int edgeCount;
+}
+
+// Описывает ребро (линию) через индексы узлов
+public struct EdgeInfoBurst
+{
+    public int nodeA_idx;
+    public int nodeB_idx;
+}
+
+public struct BiomeInfluence
+{
+    public ushort blockID;
+    public float influence;
 }
 
 [System.Serializable]

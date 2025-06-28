@@ -1,7 +1,7 @@
-// --- ФАЙЛ: BiomeManager.cs (ДОПОЛНЕННАЯ ВЕРСИЯ) ---
 using UnityEngine;
 using System.Collections.Generic;
-using Unity.Mathematics; // Для float2
+using System.Linq;
+using Unity.Mathematics;
 
 public class BiomeManager : MonoBehaviour
 {
@@ -9,117 +9,139 @@ public class BiomeManager : MonoBehaviour
 
     [Header("Источники Биомов")]
     public List<BiomePlacementSettingsSO> availableBiomes;
-
     [Header("Параметры Размещения")]
     public int regionSize = 512;
     [Range(0f, 1f)] public float biomePlacementChance = 0.3f;
-    
-    [Header("Параметры Прогрессии")]
-    public float maxProgressionDistance = 3000f;
-    [Range(0f, 0.5f)] public float chaosFactor = 0.1f;
-    
-    private Dictionary<Vector2Int, BiomeInstance> placedBiomeCache = new Dictionary<Vector2Int, BiomeInstance>();
-    private int placementSeed;
-    private FastNoiseLite chaosNoise;
+    [Tooltip("Радиус в регионах для поиска соседей при генерации")]
+    public int searchRadiusInRegions = 3; 
 
-    private void Awake()
-    {
-        Instance = this;
-    }
+    private Dictionary<Vector2Int, List<BiomeCluster>> regionCache = new Dictionary<Vector2Int, List<BiomeCluster>>();
+    private int placementSeed;
+    
+    void Awake() { Instance = this; }
 
     public void Initialize(WorldSettingsSO worldSettings)
     {
-        if (worldSettings == null)
-        {
-            this.enabled = false;
-            return;
-        }
-
-        var heightSettings = worldSettings.heightmapNoiseSettings;
-        placementSeed = heightSettings.seed;
-
-        chaosNoise = new FastNoiseLite(placementSeed + 1);
-        chaosNoise.SetNoiseType(FastNoiseLite.NoiseType.Value);
-        chaosNoise.SetFrequency(0.1f);
-    }
-    
-    // --- НОВЫЙ МЕТОД (ЗАГЛУШКА) ---
-    /// <summary>
-    /// Возвращает список всех оверлеев (руд, и т.д.), которые могут влиять на данный чанк.
-    /// ПОКА ЧТО ЭТО ПРОСТО ЗАГЛУШКА.
-    /// </summary>
-    public List<OverlayPlacementDataBurst> GetOverlaysInArea(Vector3Int chunkPosition, int renderDistance)
-    {
-        // В будущем здесь будет логика поиска и создания рудных жил,
-        // залежей кристаллов и т.д. в области видимости.
-        // Сейчас мы просто возвращаем пустой список, чтобы система работала.
-        return new List<OverlayPlacementDataBurst>();
+        if (worldSettings == null) { this.enabled = false; return; }
+        placementSeed = worldSettings.heightmapNoiseSettings.seed;
     }
 
-    public List<BiomeInstance> GetBiomesInArea(Vector3Int chunkPosition, int renderDistance)
+    public List<BiomeCluster> GetClustersInArea(Vector3Int chunkPosition, int renderDistance)
     {
-        var biomeCores = new List<BiomeInstance>();
-        int chunkRenderRadius = renderDistance + 2;
+        var finalClusters = new HashSet<BiomeCluster>();
+        int searchRadius = renderDistance + 2; 
         Vector2Int centerRegion = new Vector2Int(
-            Mathf.RoundToInt(chunkPosition.x * Chunk.Width / (float)regionSize),
-            Mathf.RoundToInt(chunkPosition.z * Chunk.Width / (float)regionSize)
-        );
-        int searchRadius = Mathf.CeilToInt((chunkRenderRadius * Chunk.Width + 2048) / (float)regionSize);
+            Mathf.FloorToInt((chunkPosition.x * Chunk.Width) / (float)regionSize),
+            Mathf.FloorToInt((chunkPosition.z * Chunk.Width) / (float)regionSize));
 
-        for (int x = -searchRadius; x <= searchRadius; x++)
-        {
-            for (int z = -searchRadius; z <= searchRadius; z++)
-            {
-                Vector2Int regionCoords = new Vector2Int(centerRegion.x + x, centerRegion.y + z);
-                BiomeInstance instance = GetOrCreateBiomeInstanceForRegion(regionCoords);
-                if (instance != null)
-                {
-                    biomeCores.Add(instance);
+        for (int x = -searchRadius; x <= searchRadius; x++) {
+            for (int z = -searchRadius; z <= searchRadius; z++) {
+                foreach (var cluster in GetOrCreateClustersForRegion(centerRegion + new Vector2Int(x, z))) {
+                    finalClusters.Add(cluster);
                 }
             }
         }
-        return biomeCores;
+        return finalClusters.ToList();
     }
 
-    private BiomeInstance GetOrCreateBiomeInstanceForRegion(Vector2Int regionCoords)
+    private List<BiomeCluster> GetOrCreateClustersForRegion(Vector2Int regionCoords)
     {
-        if (placedBiomeCache.TryGetValue(regionCoords, out BiomeInstance instance))
-        {
-            return instance;
+        if (regionCache.TryGetValue(regionCoords, out var clusters)) return clusters;
+
+        // --- ЭТАП 1: Генерация всех потенциальных ядер ---
+        var candidateInstances = new List<BiomeInstance>();
+        for (int x = -searchRadiusInRegions; x <= searchRadiusInRegions; x++) {
+            for (int z = -searchRadiusInRegions; z <= searchRadiusInRegions; z++) {
+                Vector2Int currentRegion = regionCoords + new Vector2Int(x, z);
+                if (regionCache.ContainsKey(currentRegion)) continue;
+                
+                int regionSeed = placementSeed + currentRegion.x * 16777619 + currentRegion.y * 3145739;
+                var random = new System.Random(regionSeed);
+
+                if (random.NextDouble() < biomePlacementChance) {
+                    var settings = availableBiomes[random.Next(0, availableBiomes.Count)];
+                    var biomeInstance = new BiomeInstance {
+                        position = new float2((currentRegion.x + (float)random.NextDouble()) * regionSize, (currentRegion.y + (float)random.NextDouble()) * regionSize),
+                        settings = settings,
+                        calculatedRadius = Mathf.Lerp(settings.influenceRadius.x, settings.influenceRadius.y, 0.5f),
+                        calculatedContrast = Mathf.Lerp(settings.contrast.x, settings.contrast.y, 0.5f),
+                        coreRadiusPercentage = settings.coreRadiusPercentage
+                    };
+                    candidateInstances.Add(biomeInstance);
+                }
+            }
+        }
+        
+        // --- ЭТАП 2: Построение кластеров по принципу "видимости" ---
+        var finalClusters = new List<BiomeCluster>();
+        var assignedInstances = new HashSet<BiomeInstance>();
+
+        foreach (var instance in candidateInstances) {
+            if (assignedInstances.Contains(instance)) continue;
+            
+            var matchingCluster = finalClusters.FirstOrDefault(c => 
+                c.settings.biome.biomeID == instance.settings.biome.biomeID &&
+                c.nodes.Values.Any(n => math.distance(n.position, instance.position) < (c.influenceRadius + instance.calculatedRadius) * 0.8f));
+
+            if (matchingCluster != null) {
+                var newNode = new BiomeNode(matchingCluster.nodes.Count, instance.position);
+                matchingCluster.AddNode(newNode);
+                var closestNode = matchingCluster.nodes.Values.OrderBy(n => math.distance(n.position, newNode.position)).First();
+                matchingCluster.AddEdge(new BiomeEdge(closestNode.id, newNode.id));
+            } else {
+                var newNode = new BiomeNode(0, instance.position);
+                var newCluster = new BiomeCluster(newNode, instance);
+                finalClusters.Add(newCluster);
+            }
+            assignedInstances.Add(instance);
         }
 
-        int regionSeed = placementSeed + regionCoords.x * 16777619 + regionCoords.y * 3145739;
-        var random = new System.Random(regionSeed);
+        // --- ЭТАП 3: Удаление "зажатых" кластеров (Culling) ---
+        var clustersToRemove = new HashSet<BiomeCluster>();
+        foreach (var cluster in finalClusters) {
+            float pressure = 0f;
+            foreach (var otherCluster in finalClusters) {
+                if (cluster == otherCluster) continue;
 
-        if (random.NextDouble() > biomePlacementChance)
-        {
-            placedBiomeCache.Add(regionCoords, null);
-            return null;
+                // Определяем силу кластеров (например, по радиусу)
+                if (otherCluster.influenceRadius > cluster.influenceRadius) {
+                    float dist = GetMinDistanceBetweenClusters(cluster, otherCluster);
+                    if (dist < otherCluster.influenceRadius) {
+                        pressure += 1.0f - math.saturate(dist / otherCluster.influenceRadius);
+                    }
+                }
+            }
+            // Если давление со всех сторон слишком большое, помечаем на удаление
+            if (pressure > 1.2f) { // Порог можно настраивать
+                clustersToRemove.Add(cluster);
+            }
         }
+        finalClusters.RemoveAll(c => clustersToRemove.Contains(c));
 
-        int biomeTypeIndex = random.Next(0, availableBiomes.Count);
-        BiomePlacementSettingsSO settings = availableBiomes[biomeTypeIndex];
-
-        float posX = (regionCoords.x + (float)random.NextDouble()) * regionSize;
-        float posZ = (regionCoords.y + (float)random.NextDouble()) * regionSize;
-        Vector2 potentialPosition = new Vector2(posX, posZ);
-
-        float distFromOrigin = potentialPosition.magnitude;
-        float progression = Mathf.Clamp01((distFromOrigin - settings.neutralZoneRadius) / (maxProgressionDistance - settings.neutralZoneRadius));
-        float chaos = chaosNoise.GetNoise(posX, posZ) * chaosFactor;
-        float finalProgression = Mathf.Clamp01(progression + chaos);
-
-        BiomeInstance newInstance = new BiomeInstance
-        {
-            position = potentialPosition,
-            settings = settings,
-            calculatedRadius = Mathf.Lerp(settings.influenceRadius.x, settings.influenceRadius.y, finalProgression),
-            calculatedContrast = Mathf.Lerp(settings.contrast.x, settings.contrast.y, finalProgression),
-            coreRadiusPercentage = settings.coreRadiusPercentage,
-            sharpness = settings.sharpness
-        };
-
-        placedBiomeCache.Add(regionCoords, newInstance);
-        return newInstance;
+        // Кэшируем результат для всех затронутых регионов
+        for (int x = -searchRadiusInRegions; x <= searchRadiusInRegions; x++) {
+            for (int z = -searchRadiusInRegions; z <= searchRadiusInRegions; z++) {
+                Vector2Int r = regionCoords + new Vector2Int(x, z);
+                if (!regionCache.ContainsKey(r)) {
+                    regionCache.Add(r, finalClusters);
+                }
+            }
+        }
+        return finalClusters;
+    }
+    
+    private float GetMinDistanceBetweenClusters(BiomeCluster a, BiomeCluster b) {
+        float minDst = float.MaxValue;
+        foreach (var nodeA in a.nodes.Values) {
+            foreach (var nodeB in b.nodes.Values) {
+                minDst = math.min(minDst, math.distance(nodeA.position, nodeB.position));
+            }
+        }
+        return minDst;
+    }
+    
+    // Метод GetOverlaysInArea остается без изменений
+    public List<OverlayPlacementDataBurst> GetOverlaysInArea(Vector3Int chunkPosition, int renderDistance) {
+        return new List<OverlayPlacementDataBurst>();
     }
 }

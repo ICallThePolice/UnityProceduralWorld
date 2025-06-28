@@ -247,9 +247,9 @@ MonoBehaviour:
   - {fileID: 11400000, guid: 4508a850cd0fad140adbe54e6db51c00, type: 2}
   - {fileID: 11400000, guid: e6bbe22175526e34ebc26c30900f5d75, type: 2}
   - {fileID: 11400000, guid: fead691f4db56ca4d8524f205479aa9f, type: 2}
-  regionSize: 512
-  biomePlacementChance: 0.3
-  maxProgressionDistance: 3000
+  regionSize: 128
+  biomePlacementChance: 0.482
+  maxProgressionDistance: 1000
   chaosFactor: 0.1
 --- !u!4 &1103137696
 Transform:
@@ -370,7 +370,7 @@ Transform:
   m_GameObject: {fileID: 1243975143}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 74.5, y: 32, z: -105.1}
+  m_LocalPosition: {x: 24.4, y: 32, z: -87.5}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -528,8 +528,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   target: {fileID: 1243975147}
   distance: 16
-  rotationX: 35
-  rotationY: -45
+  rotationX: 60
+  rotationY: 0
 --- !u!1 &1544464183
 GameObject:
   m_ObjectHideFlags: 0
@@ -656,8 +656,8 @@ SceneRoots:
   m_ObjectHideFlags: 0
   m_Roots:
   - {fileID: 1263904221}
+  - {fileID: 764997537}
   - {fileID: 1544464186}
+  - {fileID: 1243975147}
   - {fileID: 1103137696}
   - {fileID: 701880190}
-  - {fileID: 1243975147}
-  - {fileID: 764997537}

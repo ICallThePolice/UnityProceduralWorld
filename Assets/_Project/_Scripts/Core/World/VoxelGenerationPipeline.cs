@@ -1,10 +1,10 @@
 using UnityEngine;
-using System.Collections.Generic;
 using Unity.Collections;
 using Unity.Jobs;
 using UnityEngine.Rendering;
-using System;
 using Unity.Mathematics;
+using System;
+using System.Collections.Generic;
 
 #region Вспомогательные классы запросов
 public class AsyncChunkDataRequest
@@ -21,7 +21,6 @@ public class AsyncChunkDataRequest
     public NativeArray<float2> finalMaterialProps;
     public NativeArray<float> finalGapWidths;
     public NativeArray<float3> finalBevelData;
-    public NativeArray<BiomeInstanceBurst> BiomeInstances;
     public NativeArray<OverlayPlacementDataBurst> OverlayPlacements;
 
     public void Dispose()
@@ -36,7 +35,6 @@ public class AsyncChunkDataRequest
         if (finalMaterialProps.IsCreated) finalMaterialProps.Dispose();
         if (finalGapWidths.IsCreated) finalGapWidths.Dispose();
         if (finalBevelData.IsCreated) finalBevelData.Dispose();
-        if (BiomeInstances.IsCreated) BiomeInstances.Dispose();
         if (OverlayPlacements.IsCreated) OverlayPlacements.Dispose();
     }
 }
@@ -191,27 +189,51 @@ public class VoxelGenerationPipeline
         chunksToGenerateData.RemoveAt(0);
         chunkToProcess.isDataGenerated = true;
 
-        List<BiomeInstance> relevantBiomes = biomeManager.GetBiomesInArea(chunkToProcess.chunkPosition, settings.renderDistance);
+        List<BiomeCluster> relevantClusters = biomeManager.GetClustersInArea(chunkToProcess.chunkPosition, settings.renderDistance);
         List<OverlayPlacementDataBurst> relevantOverlays = biomeManager.GetOverlaysInArea(chunkToProcess.chunkPosition, settings.renderDistance);
 
-        var biomeInstancesForJob = new NativeArray<BiomeInstanceBurst>(relevantBiomes.Count, Allocator.TempJob);
-        for (int i = 0; i < relevantBiomes.Count; i++)
-        {
-            var instance = relevantBiomes[i];
-            biomeInstancesForJob[i] = new BiomeInstanceBurst
-            {
-                biomeID = instance.settings.biome.biomeID,
-                position = instance.position,
-                influenceRadius = instance.calculatedRadius,
-                contrast = instance.calculatedContrast,
-                blockID = instance.settings.biome.BiomeBlock.ID,
-                coreRadiusPercentage = instance.coreRadiusPercentage,
-                sharpness = instance.sharpness
-            };
-        }
+        // --- Упаковка данных для джоба ---
+        var clusterInfoList = new List<ClusterInfoBurst>();
+        var allNodesList = new List<float2>();
+        var allEdgesList = new List<EdgeInfoBurst>();
 
-        var overlayPlacementsForJob = new NativeArray<OverlayPlacementDataBurst>(relevantOverlays.Count, Allocator.TempJob);
-        overlayPlacementsForJob.CopyFrom(relevantOverlays.ToArray());
+        foreach (var cluster in relevantClusters)
+        {
+            int nodeStartIndex = allNodesList.Count;
+            var nodeMap = new Dictionary<int, int>();
+            int localIndex = 0;
+            foreach (var node in cluster.nodes.Values)
+            {
+                nodeMap[node.id] = localIndex++;
+                allNodesList.Add(node.position);
+            }
+
+            int edgeStartIndex = allEdgesList.Count;
+            foreach (var edge in cluster.edges)
+            {
+                allEdgesList.Add(new EdgeInfoBurst { 
+                    nodeA_idx = nodeStartIndex + nodeMap[edge.nodeA_id], 
+                    nodeB_idx = nodeStartIndex + nodeMap[edge.nodeB_id] 
+                });
+            }
+            
+            clusterInfoList.Add(new ClusterInfoBurst
+            {
+                blockID = cluster.settings.biome.BiomeBlock.ID,
+                influenceRadius = cluster.influenceRadius,
+                contrast = cluster.contrast,
+                coreRadiusPercentage = cluster.coreRadiusPercentage,
+                nodeStartIndex = nodeStartIndex,
+                nodeCount = cluster.nodes.Count,
+                edgeStartIndex = edgeStartIndex,
+                edgeCount = cluster.edges.Count
+            });
+        }
+        
+        var clustersForJob = new NativeArray<ClusterInfoBurst>(clusterInfoList.ToArray(), Allocator.TempJob);
+        var allNodesForJob = new NativeArray<float2>(allNodesList.ToArray(), Allocator.TempJob);
+        var allEdgesForJob = new NativeArray<EdgeInfoBurst>(allEdgesList.ToArray(), Allocator.TempJob);
+        var overlayPlacementsForJob = new NativeArray<OverlayPlacementDataBurst>(relevantOverlays.ToArray(), Allocator.TempJob);
 
         // 4.2. Настройка шума
         var heightNoise = new FastNoiseLite(settings.heightmapNoiseSettings.seed);
@@ -238,7 +260,6 @@ public class VoxelGenerationPipeline
             finalGapWidths = new NativeArray<float>(voxelCount, Allocator.Persistent),
             finalBevelData = new NativeArray<float3>(voxelCount, Allocator.Persistent),
 
-            BiomeInstances = biomeInstancesForJob,
             OverlayPlacements = overlayPlacementsForJob,
         };
 
@@ -247,7 +268,9 @@ public class VoxelGenerationPipeline
         {
             chunkPosition = chunkToProcess.chunkPosition,
             heightMapNoise = heightNoise,
-            biomeInstances = biomeInstancesForJob,
+            clusters = clustersForJob,
+            allClusterNodes = allNodesForJob,
+            allClusterEdges = allEdgesForJob,
             overlayPlacements = overlayPlacementsForJob,
             voxelTypeMap = this.voxelTypeMap,
             voxelOverlayMap = this.voxelOverlayMap,
@@ -383,20 +406,10 @@ public class VoxelGenerationPipeline
             {
                 request.JobHandle.Complete();
                 
-                var chunk = request.TargetChunk;
-                request.primaryBlockIDs.CopyTo(chunk.primaryBlockIDs);
-                request.finalColors.CopyTo(chunk.finalColors);
-                request.finalUv0s.CopyTo(chunk.finalUv0s);
-                request.finalUv1s.CopyTo(chunk.finalUv1s);
-                request.finalTexBlends.CopyTo(chunk.finalTexBlends);
-                request.finalEmissionData.CopyTo(chunk.finalEmissionData);
-                request.finalGapColors.CopyTo(chunk.finalGapColors);
-                request.finalMaterialProps.CopyTo(chunk.finalMaterialProps);
-                request.finalGapWidths.CopyTo(chunk.finalGapWidths);
-                request.finalBevelData.CopyTo(chunk.finalBevelData);
+                // Данные уже записаны напрямую в массивы чанка, копировать не нужно
                 
-                onDataReadyCallback(chunk);
-                request.Dispose();
+                onDataReadyCallback(request.TargetChunk);
+                request.Dispose(); // Очищаем временные NativeArray
                 runningDataJobs.RemoveAt(i);
             }
         }

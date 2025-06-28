@@ -13,11 +13,11 @@ MonoBehaviour:
   m_Name: Ereb_Placement
   m_EditorClassIdentifier: 
   biome: {fileID: 11400000, guid: c0b63f1671a863d49b06bd4b47b443e7, type: 2}
-  minDistanceBetweenBiomes: 256
+  minDistanceBetweenBiomes: 60
   neutralZoneRadius: 40
-  contrast: {x: 1.5, y: 5}
-  sharpness: 0.1
-  coreRadiusPercentage: 0.7
+  contrast: {x: 1, y: 1.5}
+  sharpness: 0.5
+  coreRadiusPercentage: 0.3
   influenceRadius: {x: 64, y: 256}
   aggressiveness: {x: 0.5, y: 1}
   maxTiers: {x: 1, y: 1}
