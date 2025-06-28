@@ -84,12 +84,12 @@ public class BiomeManager : MonoBehaviour
                 c.nodes.Values.Any(n => math.distance(n.position, instance.position) < (c.influenceRadius + instance.calculatedRadius) * 0.8f));
 
             if (matchingCluster != null) {
-                var newNode = new BiomeNode(matchingCluster.nodes.Count, instance.position);
+                var newNode = new BiomeCluster.BiomeNode(matchingCluster.nodes.Count, instance.position);
                 matchingCluster.AddNode(newNode);
                 var closestNode = matchingCluster.nodes.Values.OrderBy(n => math.distance(n.position, newNode.position)).First();
-                matchingCluster.AddEdge(new BiomeEdge(closestNode.id, newNode.id));
+                matchingCluster.AddEdge(new BiomeCluster.BiomeEdge(closestNode.id, newNode.id));
             } else {
-                var newNode = new BiomeNode(0, instance.position);
+                var newNode = new BiomeCluster.BiomeNode(0, instance.position);
                 var newCluster = new BiomeCluster(newNode, instance);
                 finalClusters.Add(newCluster);
             }
@@ -97,28 +97,47 @@ public class BiomeManager : MonoBehaviour
         }
 
         // --- ЭТАП 3: Удаление "зажатых" кластеров (Culling) ---
-        var clustersToRemove = new HashSet<BiomeCluster>();
-        foreach (var cluster in finalClusters) {
-            float pressure = 0f;
-            foreach (var otherCluster in finalClusters) {
-                if (cluster == otherCluster) continue;
+        var clustersToCull = new HashSet<BiomeCluster>();
 
-                // Определяем силу кластеров (например, по радиусу)
-                if (otherCluster.influenceRadius > cluster.influenceRadius) {
-                    float dist = GetMinDistanceBetweenClusters(cluster, otherCluster);
-                    if (dist < otherCluster.influenceRadius) {
-                        pressure += 1.0f - math.saturate(dist / otherCluster.influenceRadius);
+        for (int i = 0; i < finalClusters.Count; i++)
+        {
+            for (int j = i + 1; j < finalClusters.Count; j++)
+            {
+                var clusterA = finalClusters[i];
+                var clusterB = finalClusters[j];
+
+                // Пропускаем, если кластеры уже помечены на удаление или принадлежат одному биому
+                if (clustersToCull.Contains(clusterA) || clustersToCull.Contains(clusterB) || clusterA.settings.biome.biomeID == clusterB.settings.biome.biomeID)
+                {
+                    continue;
+                }
+
+                float distance = GetMinDistanceBetweenClusters(clusterA, clusterB);
+                
+                // Проверяем, пересекаются ли их радиусы влияния
+                if (distance < clusterA.influenceRadius + clusterB.influenceRadius)
+                {
+                    // Если пересекаются, помечаем на удаление более "слабый" кластер (с меньшим радиусом)
+                    if (clusterA.influenceRadius < clusterB.influenceRadius)
+                    {
+                        clustersToCull.Add(clusterA);
+                    }
+                    else
+                    {
+                        clustersToCull.Add(clusterB);
                     }
                 }
             }
-            // Если давление со всех сторон слишком большое, помечаем на удаление
-            if (pressure > 1.2f) { // Порог можно настраивать
-                clustersToRemove.Add(cluster);
-            }
         }
-        finalClusters.RemoveAll(c => clustersToRemove.Contains(c));
 
-        // Кэшируем результат для всех затронутых регионов
+        // Удаляем все помеченные кластеры из финального списка
+        if (clustersToCull.Count > 0)
+        {
+            finalClusters.RemoveAll(c => clustersToCull.Contains(c));
+        }
+
+
+        // Кэшируем результат для всех затронутых регионов (без изменений)
         for (int x = -searchRadiusInRegions; x <= searchRadiusInRegions; x++) {
             for (int z = -searchRadiusInRegions; z <= searchRadiusInRegions; z++) {
                 Vector2Int r = regionCoords + new Vector2Int(x, z);

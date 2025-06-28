@@ -3,25 +3,27 @@ using UnityEngine;
 using Unity.Mathematics;
 using System.Collections.Generic;
 
-// Узел (ядро) биома
-public class BiomeNode
-{
-    public int id;
-    public float2 position;
-    public BiomeNode(int id, float2 position) { this.id = id; this.position = position; }
-}
 
-// Ребро, соединяющее два узла
-public class BiomeEdge
-{
-    public int nodeA_id;
-    public int nodeB_id;
-    public BiomeEdge(int a, int b) { nodeA_id = a; nodeB_id = b; }
-}
 
 // Кластер биомов
 public class BiomeCluster
 {
+    // Узел (ядро) биома
+    public class BiomeNode
+    {
+        public int id;
+        public float2 position;
+        public BiomeNode(int id, float2 position) { this.id = id; this.position = position; }
+    }
+
+    // Ребро, соединяющее два узла
+    public class BiomeEdge
+    {
+        public int nodeA_id;
+        public int nodeB_id;
+        public BiomeEdge(int a, int b) { nodeA_id = a; nodeB_id = b; }
+    }
+
     public BiomePlacementSettingsSO settings;
     public Dictionary<int, BiomeNode> nodes = new Dictionary<int, BiomeNode>();
     public List<BiomeEdge> edges = new List<BiomeEdge>();

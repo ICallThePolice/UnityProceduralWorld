@@ -247,10 +247,9 @@ MonoBehaviour:
   - {fileID: 11400000, guid: 4508a850cd0fad140adbe54e6db51c00, type: 2}
   - {fileID: 11400000, guid: e6bbe22175526e34ebc26c30900f5d75, type: 2}
   - {fileID: 11400000, guid: fead691f4db56ca4d8524f205479aa9f, type: 2}
-  regionSize: 128
+  regionSize: 256
   biomePlacementChance: 0.482
-  maxProgressionDistance: 1000
-  chaosFactor: 0.1
+  searchRadiusInRegions: 3
 --- !u!4 &1103137696
 Transform:
   m_ObjectHideFlags: 0

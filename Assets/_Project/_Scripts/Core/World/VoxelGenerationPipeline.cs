@@ -6,83 +6,6 @@ using Unity.Mathematics;
 using System;
 using System.Collections.Generic;
 
-#region Вспомогательные классы запросов
-public class AsyncChunkDataRequest
-{
-    public JobHandle JobHandle;
-    public Chunk TargetChunk;
-    public NativeArray<ushort> primaryBlockIDs;
-    public NativeArray<Color32> finalColors;
-    public NativeArray<float2> finalUv0s;
-    public NativeArray<float2> finalUv1s;
-    public NativeArray<float> finalTexBlends;
-    public NativeArray<float4> finalEmissionData;
-    public NativeArray<float4> finalGapColors;
-    public NativeArray<float2> finalMaterialProps;
-    public NativeArray<float> finalGapWidths;
-    public NativeArray<float3> finalBevelData;
-    public NativeArray<OverlayPlacementDataBurst> OverlayPlacements;
-
-    public void Dispose()
-    {
-        if (primaryBlockIDs.IsCreated) primaryBlockIDs.Dispose();
-        if (finalColors.IsCreated) finalColors.Dispose();
-        if (finalUv0s.IsCreated) finalUv0s.Dispose();
-        if (finalUv1s.IsCreated) finalUv1s.Dispose();
-        if (finalTexBlends.IsCreated) finalTexBlends.Dispose();
-        if (finalEmissionData.IsCreated) finalEmissionData.Dispose();
-        if (finalGapColors.IsCreated) finalGapColors.Dispose();
-        if (finalMaterialProps.IsCreated) finalMaterialProps.Dispose();
-        if (finalGapWidths.IsCreated) finalGapWidths.Dispose();
-        if (finalBevelData.IsCreated) finalBevelData.Dispose();
-        if (OverlayPlacements.IsCreated) OverlayPlacements.Dispose();
-    }
-}
-
-public class AsyncChunkMeshRequest
-{
-    public JobHandle JobHandle;
-    public Chunk TargetChunk;
-    public NativeArray<ushort> primaryBlockIDs;
-    public NativeArray<Color32> finalColors;
-    public NativeArray<float2> finalUv0s;
-    public NativeArray<float2> finalUv1s;
-    public NativeArray<float> finalTexBlends;
-    public NativeArray<float4> finalEmissionData;
-    public NativeArray<float4> finalGapColors;
-    public NativeArray<float2> finalMaterialProps;
-    public NativeArray<float> finalGapWidths;
-    public NativeArray<float3> finalBevelData;
-    public NativeArray<ushort> NeighborPosX, NeighborNegX, NeighborPosY, NeighborNegY, NeighborPosZ, NeighborNegZ;
-    public NativeList<Vertex> Vertices;
-    public NativeList<int> Triangles;
-
-    public void DisposeAll()
-    {
-        if (primaryBlockIDs.IsCreated) primaryBlockIDs.Dispose();
-        if (finalColors.IsCreated) finalColors.Dispose();
-        if (finalUv0s.IsCreated) finalUv0s.Dispose();
-        if (finalUv1s.IsCreated) finalUv1s.Dispose();
-        if (finalTexBlends.IsCreated) finalTexBlends.Dispose();
-        if (finalEmissionData.IsCreated) finalEmissionData.Dispose();
-        if (finalGapColors.IsCreated) finalGapColors.Dispose();
-        if (finalMaterialProps.IsCreated) finalMaterialProps.Dispose();
-        if (finalGapWidths.IsCreated) finalGapWidths.Dispose();
-        if (finalBevelData.IsCreated) finalBevelData.Dispose();
-        if (NeighborPosX.IsCreated) NeighborPosX.Dispose();
-        if (NeighborNegX.IsCreated) NeighborNegX.Dispose();
-        if (NeighborPosY.IsCreated) NeighborPosY.Dispose();
-        if (NeighborNegY.IsCreated) NeighborNegY.Dispose();
-        if (NeighborPosZ.IsCreated) NeighborPosZ.Dispose();
-        if (NeighborNegZ.IsCreated) NeighborNegZ.Dispose();
-        if (Vertices.IsCreated) Vertices.Dispose();
-        if (Triangles.IsCreated) Triangles.Dispose();
-    }
-}
-#endregion
-///
-/// <summary> НАЧАЛО КЛАССА VoxelGenerationPipeline </summary>
-///
 public class VoxelGenerationPipeline
 {
     public event Action<Chunk, Mesh> OnChunkMeshReady;
@@ -230,11 +153,6 @@ public class VoxelGenerationPipeline
             });
         }
         
-        var clustersForJob = new NativeArray<ClusterInfoBurst>(clusterInfoList.ToArray(), Allocator.TempJob);
-        var allNodesForJob = new NativeArray<float2>(allNodesList.ToArray(), Allocator.TempJob);
-        var allEdgesForJob = new NativeArray<EdgeInfoBurst>(allEdgesList.ToArray(), Allocator.TempJob);
-        var overlayPlacementsForJob = new NativeArray<OverlayPlacementDataBurst>(relevantOverlays.ToArray(), Allocator.TempJob);
-
         // 4.2. Настройка шума
         var heightNoise = new FastNoiseLite(settings.heightmapNoiseSettings.seed);
         heightNoise.SetFrequency(settings.heightmapNoiseSettings.scale);
@@ -243,12 +161,19 @@ public class VoxelGenerationPipeline
         heightNoise.SetFractalLacunarity(settings.heightmapNoiseSettings.lacunarity);
         heightNoise.SetFractalGain(settings.heightmapNoiseSettings.persistence);
 
-        // 4.3. Создание обертки для запроса, которая будет хранить все ВЫХОДНЫЕ массивы
+        // 4.3. Создаем request и выделяем память ТОЛЬКО ОДИН РАЗ
         int voxelCount = Chunk.Size;
         var request = new AsyncChunkDataRequest
         {
             TargetChunk = chunkToProcess,
 
+            // Временные массивы (которые раньше утекали)
+            clustersForJob = new NativeArray<ClusterInfoBurst>(clusterInfoList.ToArray(), Allocator.TempJob),
+            allNodesForJob = new NativeArray<float2>(allNodesList.ToArray(), Allocator.TempJob),
+            allEdgesForJob = new NativeArray<EdgeInfoBurst>(allEdgesList.ToArray(), Allocator.TempJob),
+            OverlayPlacements = new NativeArray<OverlayPlacementDataBurst>(relevantOverlays.ToArray(), Allocator.TempJob),
+
+            // Выходные массивы (хранятся дольше)
             primaryBlockIDs = new NativeArray<ushort>(voxelCount, Allocator.Persistent),
             finalColors = new NativeArray<Color32>(voxelCount, Allocator.Persistent),
             finalUv0s = new NativeArray<float2>(voxelCount, Allocator.Persistent),
@@ -259,23 +184,26 @@ public class VoxelGenerationPipeline
             finalMaterialProps = new NativeArray<float2>(voxelCount, Allocator.Persistent),
             finalGapWidths = new NativeArray<float>(voxelCount, Allocator.Persistent),
             finalBevelData = new NativeArray<float3>(voxelCount, Allocator.Persistent),
-
-            OverlayPlacements = overlayPlacementsForJob,
         };
 
-        // 5. ИНИЦИАЛИЗАЦИЯ И ЗАПУСК ДЖОБА
+        // 5. ИНИЦИАЛИЗАЦИЯ И ЗАПУСК ДЖОБА С ДАННЫМИ ИЗ REQUEST
         var job = new GenerationJob
         {
             chunkPosition = chunkToProcess.chunkPosition,
             heightMapNoise = heightNoise,
-            clusters = clustersForJob,
-            allClusterNodes = allNodesForJob,
-            allClusterEdges = allEdgesForJob,
-            overlayPlacements = overlayPlacementsForJob,
+            
+            // Передаем массивы ИЗ ОБЪЕКТА REQUEST
+            clusters = request.clustersForJob,
+            allClusterNodes = request.allNodesForJob,
+            allClusterEdges = request.allEdgesForJob,
+            overlayPlacements = request.OverlayPlacements,
+            
             voxelTypeMap = this.voxelTypeMap,
             voxelOverlayMap = this.voxelOverlayMap,
             globalBiomeBlockID = settings.globalBiomeBlock.ID,
             atlasSizeInTiles = new float2(settings.atlasSizeInTiles.x, settings.atlasSizeInTiles.y),
+            
+            // Передаем выходные массивы (здесь все было правильно)
             primaryBlockIDs = request.primaryBlockIDs,
             finalColors = request.finalColors,
             finalUv0s = request.finalUv0s,
@@ -405,10 +333,23 @@ public class VoxelGenerationPipeline
             if (request.JobHandle.IsCompleted)
             {
                 request.JobHandle.Complete();
-                
-                // Данные уже записаны напрямую в массивы чанка, копировать не нужно
-                
-                onDataReadyCallback(request.TargetChunk);
+                var chunk = request.TargetChunk;
+                if (chunk != null) // Доп. проверка, что чанк еще существует
+                {
+                    request.primaryBlockIDs.CopyTo(chunk.primaryBlockIDs);
+                    request.finalColors.CopyTo(chunk.finalColors);
+                    request.finalUv0s.CopyTo(chunk.finalUv0s);
+                    request.finalUv1s.CopyTo(chunk.finalUv1s);
+                    request.finalTexBlends.CopyTo(chunk.finalTexBlends);
+                    request.finalEmissionData.CopyTo(chunk.finalEmissionData);
+                    request.finalGapColors.CopyTo(chunk.finalGapColors);
+                    request.finalMaterialProps.CopyTo(chunk.finalMaterialProps);
+                    request.finalGapWidths.CopyTo(chunk.finalGapWidths);
+                    request.finalBevelData.CopyTo(chunk.finalBevelData);
+
+                    onDataReadyCallback(chunk);
+                }
+
                 request.Dispose(); // Очищаем временные NativeArray
                 runningDataJobs.RemoveAt(i);
             }

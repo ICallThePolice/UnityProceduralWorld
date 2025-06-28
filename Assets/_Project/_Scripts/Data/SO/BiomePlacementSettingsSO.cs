@@ -7,10 +7,6 @@ public class BiomePlacementSettingsSO : ScriptableObject
 {
     [Header("Идентификация")]
     public BiomeDefinitionSO biome;
-
-    [Header("Параметры размещения")]
-    public float minDistanceBetweenBiomes = 500f;
-    public float neutralZoneRadius = 500f;
     
     [Header("Динамические параметры (Min/Max)")]
     [Tooltip("Как резко биом переходит в нейтральную зону. >1 - резче, <1 - плавнее.")]
