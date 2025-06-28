@@ -27,6 +27,7 @@ public class WorldController : MonoBehaviour
     
     private void SetupShaderGlobals()
     {
+        // ИСПРАВЛЕНО: Проверяем и устанавливаем текстуру из worldSettings
         if (worldSettings.worldMaterial != null && worldSettings.worldTextureAtlas != null)
         {
             worldSettings.worldMaterial.SetTexture("_MainTex", worldSettings.worldTextureAtlas);

@@ -7,15 +7,7 @@ using System.Collections.Generic;
 using Unity.Mathematics; 
 
 // --- Перечисления (Enums) ---
-public enum VoxelCategory {
-    Landscape,   // Категория для земли, камня, песка и т.д.
-    Ore,         // Для всех видов руд
-    Crystal,     // Для кристаллов и драгоценных камней
-    Flora,       // Для растений, деревьев, грибов
-    ManMade,     // Для построек, стен, дорог
-    Liquid,      // Для воды, лавы
-    Special      // Для всего остального (порталы, барьеры и т.д.)
-}
+public enum VoxelCategory { Landscape, Ore, Crystal, Flora, ManMade, Liquid, Special }
 public enum TerrainModifier { Additive, Subtractive, Replace }
 public enum BiomeInfluenceShape { Radial, OrganicNoise }
 public enum Direction { Back, Front, Top, Bottom, Left, Right }
@@ -43,19 +35,19 @@ public interface IArtifactGenerator
 
 public struct Vertex
 {
-    public float3 position; 
-    public float3 normal;       
-    public float4 tangent;
-    public Color32 color;         // Итоговый смешанный цвет
-    public float2 uv0;           // UV для базовой текстуры
-    public float2 uv1;           // UV для текстуры наложения
-    public float  texBlend;      // Сила смешивания текстур
-    public float4 emissionData;  // Итоговые данные о свечении (R,G,B, Strength)
-    public float4 gapColor;      // Итоговый цвет шва
-    public float2 materialProps; // Итоговые свойства материала (Smoothness, Metallic)
-    public float  gapWidth;      // Итоговая ширина шва
-    public float3 bevelData;     // Итоговые данные о фаске (Width, Strength, Direction)
+    public float3 position;
+    public Color32 color;
+    public float3 normal; 
+    public float2 uv0;
+    public float2 uv1;
+    public float  texBlend;
+    public float4 emissionData;
+    public float4 gapColor;
+    public float2 materialProps;
+    public float  gapWidth;
+    public float3 bevelData;
 }
+
 
 public class ArtifactInstance
 {
@@ -86,34 +78,58 @@ public class BiomeInstance
     public List<ArtifactInstance> childArtifacts = new List<ArtifactInstance>(); 
 }
 
-/// <summary>
-/// Burst-совместимая структура для хранения данных о базовом типе вокселя.
-/// </summary>
 [System.Serializable]
 public struct VoxelTypeDataBurst
 {
     public ushort id;
+    public bool isSolid;
     public Color32 baseColor;
     public float2 baseUV;
     public float gapWidth;
     public Color32 gapColor;
+    public float3 bevelData;
 }
 
-/// <summary>
-/// Burst-совместимая структура для хранения данных о наложении (оверлее).
-/// </summary>
 [System.Serializable]
 public struct VoxelOverlayDataBurst
 {
     public ushort id;
     public int priority;
     public Color32 tintColor;
-    public float2 overlayUV; // Координаты в атласе
+    public float2 overlayUV;
     public float gapWidth;
-    public Color32 gapColor; // Используем Color32 для экономии
-    public float2 materialProps; // x = Smoothness, y = Metallic
-    public float4 emissionData;  // x,y,z = Color, w = Strength
-    public float3 bevelData;     // x = Width, y = Strength, z = Direction
+    public Color32 gapColor;
+    public float2 materialProps;
+    public float4 emissionData;
+    public float3 bevelData;
+}
+
+public static class VoxelData
+{
+    // Позиции вершин для 6 граней вокселя (4 вертекса на грань)
+    public static readonly float3[] FaceVertices = {
+        // Back, Front, Top, Bottom, Left, Right
+        new float3(0, 0, 0), new float3(0, 1, 0), new float3(1, 1, 0), new float3(1, 0, 0),
+        new float3(1, 0, 1), new float3(1, 1, 1), new float3(0, 1, 1), new float3(0, 0, 1),
+        new float3(0, 1, 0), new float3(0, 1, 1), new float3(1, 1, 1), new float3(1, 1, 0),
+        new float3(0, 0, 1), new float3(0, 0, 0), new float3(1, 0, 0), new float3(1, 0, 1),
+        new float3(0, 0, 1), new float3(0, 1, 1), new float3(0, 1, 0), new float3(0, 0, 0),
+        new float3(1, 0, 0), new float3(1, 1, 0), new float3(1, 1, 1), new float3(1, 0, 1)
+    };
+    
+    public static readonly float3[] FaceNormals = {
+        new float3(0, 0, -1), new float3(0, 0, 1), new float3(0, 1, 0),
+        new float3(0, -1, 0), new float3(-1, 0, 0), new float3(1, 0, 0)
+    };
+
+    public static readonly float4[] FaceTangents = {
+        new float4(1, 0, 0, -1), new float4(-1, 0, 0, -1), new float4(1, 0, 0, 1),
+        new float4(1, 0, 0, -1), new float4(0, 0, -1, -1), new float4(0, 0, 1, -1)
+    };
+    
+    public static readonly float2[] FaceUVs = {
+        new float2(0, 0), new float2(0, 1), new float2(1, 1), new float2(1, 0)
+    };
 }
 
 /// <summary>
