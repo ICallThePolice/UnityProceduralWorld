@@ -1,3 +1,4 @@
+// --- ФАЙЛ: AsyncRequestStructs.cs (ФИНАЛЬНАЯ ВЕРСИЯ) ---
 using UnityEngine;
 using Unity.Collections;
 using Unity.Jobs;
@@ -7,6 +8,8 @@ public class AsyncChunkDataRequest
 {
     public JobHandle JobHandle;
     public Chunk TargetChunk;
+
+    // Только выходные массивы для меша
     public NativeArray<ushort> primaryBlockIDs;
     public NativeArray<Color32> finalColors;
     public NativeArray<float2> finalUv0s;
@@ -17,10 +20,6 @@ public class AsyncChunkDataRequest
     public NativeArray<float2> finalMaterialProps;
     public NativeArray<float> finalGapWidths;
     public NativeArray<float3> finalBevelData;
-    public NativeArray<ClusterInfoBurst> clustersForJob;
-    public NativeArray<float2> allNodesForJob;
-    public NativeArray<EdgeInfoBurst> allEdgesForJob;
-    public NativeArray<OverlayPlacementDataBurst> OverlayPlacements;
 
     public void Dispose()
     {
@@ -34,13 +33,10 @@ public class AsyncChunkDataRequest
         if (finalMaterialProps.IsCreated) finalMaterialProps.Dispose();
         if (finalGapWidths.IsCreated) finalGapWidths.Dispose();
         if (finalBevelData.IsCreated) finalBevelData.Dispose();
-        if (clustersForJob.IsCreated) clustersForJob.Dispose();
-        if (allNodesForJob.IsCreated) allNodesForJob.Dispose();
-        if (allEdgesForJob.IsCreated) allEdgesForJob.Dispose();
-        if (OverlayPlacements.IsCreated) OverlayPlacements.Dispose();
     }
 }
 
+// AsyncChunkMeshRequest остается без изменений
 public class AsyncChunkMeshRequest
 {
     public JobHandle JobHandle;

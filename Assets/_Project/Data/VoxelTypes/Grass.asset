@@ -19,8 +19,8 @@ MonoBehaviour:
   isTransparent: 0
   textureAtlasCoord: {x: 1, y: 1}
   baseColor: {r: 1, g: 1, b: 1, a: 1}
-  GapWidth: 0
-  GapColor: {r: 0.1, g: 0.1, b: 0.1, a: 1}
+  GapWidth: 0.0126
+  GapColor: {r: 0, g: 0.3773585, b: 0.041007455, a: 1}
   BevelWidth: 0.1
   BevelStrength: 0.8
   BevelDirection: -1

@@ -5,6 +5,7 @@ using UnityEngine.Rendering;
 using Unity.Mathematics;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 public class VoxelGenerationPipeline
 {
@@ -19,11 +20,13 @@ public class VoxelGenerationPipeline
 
     private NativeArray<VoxelTypeDataBurst> voxelTypeMap;
     private NativeArray<VoxelOverlayDataBurst> voxelOverlayMap;
+    private BiomeMapGPUGenerator mapGenerator;
 
     public VoxelGenerationPipeline(WorldSettingsSO settings, BiomeManager biomeManager)
     {
         this.settings = settings;
         this.biomeManager = biomeManager;
+        this.mapGenerator = new BiomeMapGPUGenerator(settings.biomeMapComputeShader);
         InitializeVoxelTypeMap();
         InitializeVoxelOverlayMap();
     }
@@ -106,54 +109,81 @@ public class VoxelGenerationPipeline
 
     private void ProcessDataGenerationQueue()
     {
-        if (runningDataJobs.Count >= SystemInfo.processorCount || chunksToGenerateData.Count == 0) return;
+        if (runningDataJobs.Count >= settings.maxMeshJobsPerFrame || chunksToGenerateData.Count == 0) return;
 
         Chunk chunkToProcess = chunksToGenerateData[0];
         chunksToGenerateData.RemoveAt(0);
         chunkToProcess.isDataGenerated = true;
 
-        List<BiomeCluster> relevantClusters = biomeManager.GetClustersInArea(chunkToProcess.chunkPosition, settings.renderDistance);
-        List<OverlayPlacementDataBurst> relevantOverlays = biomeManager.GetOverlaysInArea(chunkToProcess.chunkPosition, settings.renderDistance);
-
-        // --- Упаковка данных для джоба ---
-        var clusterInfoList = new List<ClusterInfoBurst>();
-        var allNodesList = new List<float2>();
-        var allEdgesList = new List<EdgeInfoBurst>();
-
-        foreach (var cluster in relevantClusters)
+        List<BiomeAgent> relevantAgents = biomeManager.GetBiomesInArea(chunkToProcess.chunkPosition);
+        if (relevantAgents.Count == 0)
         {
-            int nodeStartIndex = allNodesList.Count;
-            var nodeMap = new Dictionary<int, int>();
-            int localIndex = 0;
-            foreach (var node in cluster.nodes.Values)
-            {
-                nodeMap[node.id] = localIndex++;
-                allNodesList.Add(node.position);
-            }
-
-            int edgeStartIndex = allEdgesList.Count;
-            foreach (var edge in cluster.edges)
-            {
-                allEdgesList.Add(new EdgeInfoBurst { 
-                    nodeA_idx = nodeStartIndex + nodeMap[edge.nodeA_id], 
-                    nodeB_idx = nodeStartIndex + nodeMap[edge.nodeB_id] 
-                });
-            }
-            
-            clusterInfoList.Add(new ClusterInfoBurst
-            {
-                blockID = cluster.settings.biome.BiomeBlock.ID,
-                influenceRadius = cluster.influenceRadius,
-                contrast = cluster.contrast,
-                coreRadiusPercentage = cluster.coreRadiusPercentage,
-                nodeStartIndex = nodeStartIndex,
-                nodeCount = cluster.nodes.Count,
-                edgeStartIndex = edgeStartIndex,
-                edgeCount = cluster.edges.Count
-            });
+            Debug.LogWarning($"Для чанка {chunkToProcess.chunkPosition} не найдено релевантных агентов. Генерация будет пропущена.");
+            return;
         }
+
+        int mapSize = biomeManager.regionSize;
+        Vector2Int chunkStartWorldPos = new Vector2Int(chunkToProcess.chunkPosition.x * Chunk.Width, chunkToProcess.chunkPosition.z * Chunk.Width);
         
-        // 4.2. Настройка шума
+        int regionX = Mathf.FloorToInt((float)chunkStartWorldPos.x / mapSize);
+        int regionZ = Mathf.FloorToInt((float)chunkStartWorldPos.y / mapSize);
+        Vector2 mapOrigin = new Vector2(regionX * mapSize, regionZ * mapSize);
+
+        RenderTexture biomeMapRT = mapGenerator.GenerateMap(relevantAgents, mapSize, mapOrigin, biomeManager.neutralZoneWidth);
+
+        if (biomeMapRT == null)
+        {
+            Debug.LogError("Не удалось сгенерировать карту биомов на GPU. GenerateMap вернул null.");
+            return;
+        }
+
+        Texture2D cpuTexture = new Texture2D(mapSize, mapSize, TextureFormat.RGBAFloat, false);
+        RenderTexture.active = biomeMapRT;
+        cpuTexture.ReadPixels(new Rect(0, 0, mapSize, mapSize), 0, 0);
+        cpuTexture.Apply();
+        RenderTexture.active = null;
+
+        NativeArray<float4> fullMapData = cpuTexture.GetRawTextureData<float4>();
+        
+        var primaryMap = new NativeArray<ushort>(Chunk.Width * Chunk.Width, Allocator.TempJob);
+        var secondaryMap = new NativeArray<ushort>(Chunk.Width * Chunk.Width, Allocator.TempJob);
+        var blendMap = new NativeArray<float>(Chunk.Width * Chunk.Width, Allocator.TempJob);
+        
+        int mapOriginX = regionX * mapSize;
+        int mapOriginZ = regionZ * mapSize;
+        uint NO_AGENT_ID = 0xFFFFFFFF;
+        
+        for (int z = 0; z < Chunk.Width; z++)
+        {
+            for (int x = 0; x < Chunk.Width; x++)
+            {
+                int worldX = chunkStartWorldPos.x + x;
+                int worldZ = chunkStartWorldPos.y + z;
+
+                int mapX = worldX - mapOriginX;
+                int mapZ = worldZ - mapOriginZ;
+
+                int chunkMapIndex = x + z * Chunk.Width;
+                int fullMapIndex = mapX + mapZ * mapSize;
+
+                if (fullMapIndex >= 0 && fullMapIndex < fullMapData.Length)
+                {
+                    float4 data = fullMapData[fullMapIndex];
+
+                    int primaryIndex = (int)data.x;
+                    int secondaryIndex = (int)data.y;
+
+                    primaryMap[chunkMapIndex] = (primaryIndex == NO_AGENT_ID) ? (ushort)0 : relevantAgents[(int)primaryIndex].settings.biome.biomeID;
+                    secondaryMap[chunkMapIndex] = (secondaryIndex == NO_AGENT_ID) ? (ushort)0 : relevantAgents[(int)secondaryIndex].settings.biome.biomeID;
+                    blendMap[chunkMapIndex] = data.z;
+                }
+            }
+        }
+
+        // Очищаем временные GPU/CPU объекты
+        UnityEngine.Object.Destroy(cpuTexture);
+        biomeMapRT.Release();
+
         var heightNoise = new FastNoiseLite(settings.heightmapNoiseSettings.seed);
         heightNoise.SetFrequency(settings.heightmapNoiseSettings.scale);
         heightNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
@@ -161,49 +191,30 @@ public class VoxelGenerationPipeline
         heightNoise.SetFractalLacunarity(settings.heightmapNoiseSettings.lacunarity);
         heightNoise.SetFractalGain(settings.heightmapNoiseSettings.persistence);
 
-        // 4.3. Создаем request и выделяем память ТОЛЬКО ОДИН РАЗ
-        int voxelCount = Chunk.Size;
         var request = new AsyncChunkDataRequest
         {
             TargetChunk = chunkToProcess,
-
-            // Временные массивы (которые раньше утекали)
-            clustersForJob = new NativeArray<ClusterInfoBurst>(clusterInfoList.ToArray(), Allocator.TempJob),
-            allNodesForJob = new NativeArray<float2>(allNodesList.ToArray(), Allocator.TempJob),
-            allEdgesForJob = new NativeArray<EdgeInfoBurst>(allEdgesList.ToArray(), Allocator.TempJob),
-            OverlayPlacements = new NativeArray<OverlayPlacementDataBurst>(relevantOverlays.ToArray(), Allocator.TempJob),
-
-            // Выходные массивы (хранятся дольше)
-            primaryBlockIDs = new NativeArray<ushort>(voxelCount, Allocator.Persistent),
-            finalColors = new NativeArray<Color32>(voxelCount, Allocator.Persistent),
-            finalUv0s = new NativeArray<float2>(voxelCount, Allocator.Persistent),
-            finalUv1s = new NativeArray<float2>(voxelCount, Allocator.Persistent),
-            finalTexBlends = new NativeArray<float>(voxelCount, Allocator.Persistent),
-            finalEmissionData = new NativeArray<float4>(voxelCount, Allocator.Persistent),
-            finalGapColors = new NativeArray<float4>(voxelCount, Allocator.Persistent),
-            finalMaterialProps = new NativeArray<float2>(voxelCount, Allocator.Persistent),
-            finalGapWidths = new NativeArray<float>(voxelCount, Allocator.Persistent),
-            finalBevelData = new NativeArray<float3>(voxelCount, Allocator.Persistent),
+            primaryBlockIDs = new NativeArray<ushort>(Chunk.Size, Allocator.Persistent),
+            finalColors = new NativeArray<Color32>(Chunk.Size, Allocator.Persistent),
+            finalUv0s = new NativeArray<float2>(Chunk.Size, Allocator.Persistent),
+            finalUv1s = new NativeArray<float2>(Chunk.Size, Allocator.Persistent),
+            finalTexBlends = new NativeArray<float>(Chunk.Size, Allocator.Persistent),
+            finalEmissionData = new NativeArray<float4>(Chunk.Size, Allocator.Persistent),
+            finalGapColors = new NativeArray<float4>(Chunk.Size, Allocator.Persistent),
+            finalMaterialProps = new NativeArray<float2>(Chunk.Size, Allocator.Persistent),
+            finalGapWidths = new NativeArray<float>(Chunk.Size, Allocator.Persistent),
+            finalBevelData = new NativeArray<float3>(Chunk.Size, Allocator.Persistent),
         };
 
-        // 5. ИНИЦИАЛИЗАЦИЯ И ЗАПУСК ДЖОБА С ДАННЫМИ ИЗ REQUEST
         var job = new GenerationJob
         {
             chunkPosition = chunkToProcess.chunkPosition,
             heightMapNoise = heightNoise,
-            
-            // Передаем массивы ИЗ ОБЪЕКТА REQUEST
-            clusters = request.clustersForJob,
-            allClusterNodes = request.allNodesForJob,
-            allClusterEdges = request.allEdgesForJob,
-            overlayPlacements = request.OverlayPlacements,
-            
+            chunkPrimaryIdMap = primaryMap,
+            chunkSecondaryIdMap = secondaryMap,
+            chunkBlendMap = blendMap,
             voxelTypeMap = this.voxelTypeMap,
-            voxelOverlayMap = this.voxelOverlayMap,
             globalBiomeBlockID = settings.globalBiomeBlock.ID,
-            atlasSizeInTiles = new float2(settings.atlasSizeInTiles.x, settings.atlasSizeInTiles.y),
-            
-            // Передаем выходные массивы (здесь все было правильно)
             primaryBlockIDs = request.primaryBlockIDs,
             finalColors = request.finalColors,
             finalUv0s = request.finalUv0s,
@@ -215,10 +226,19 @@ public class VoxelGenerationPipeline
             finalGapWidths = request.finalGapWidths,
             finalBevelData = request.finalBevelData
         };
+        
+        JobHandle handle = job.Schedule();
+        
+        // Планируем удаление всех трех временных массивов после завершения основного джоба
+        var handle1 = primaryMap.Dispose(handle);
+        var handle2 = secondaryMap.Dispose(handle);
+        var handle3 = blendMap.Dispose(handle);
 
-        request.JobHandle = job.Schedule();
+        request.JobHandle = JobHandle.CombineDependencies(handle1, handle2, handle3);
+        
         runningDataJobs.Add(request);
     }
+
 
     private void ProcessMeshGenerationQueue(Func<Vector3Int, Chunk> getChunkCallback)
     {

@@ -9,6 +9,10 @@ public class WorldSettingsSO : ScriptableObject
     [Range(2, 16)] public int renderDistance = 8;
     public float chunkUpdateInterval = 0.25f;
 
+    [Header("GPU Ассеты")]
+    [Tooltip("Перетащите сюда ассет 'BiomeMapGenerator.compute'")]
+    public ComputeShader biomeMapComputeShader;
+
     [Header("Настройки производительности")]
     [Range(1, 8)] public int maxDataJobsPerFrame = 4;
     [Range(1, 8)] public int maxMeshJobsPerFrame = 4;

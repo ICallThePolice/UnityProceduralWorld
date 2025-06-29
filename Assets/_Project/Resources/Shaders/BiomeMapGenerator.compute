@@ -1,0 +1,106 @@
+#pragma kernel FillMapWithBlend
+#pragma kernel DrawBorders
+
+float distance_sq(float2 a, float2 b) { return dot(a - b, a - b); }
+
+struct BiomeAgentData
+{
+    float2 position;
+    float maxRadius;
+    uint biomeTypeId;
+    uint uniqueInstanceId;
+    uint partnerId;
+    uint clusterId;
+};
+
+#define NO_AGENT 0xFFFFFFFF
+
+StructuredBuffer<BiomeAgentData> _Agents;
+uint _AgentCount;
+RWTexture2D<float4> _Result;
+float2 _MapOrigin;
+uint _BorderSize;
+
+[numthreads(8,8,1)]
+void FillMapWithBlend (uint3 id : SV_DispatchThreadID)
+{
+    float2 worldPos = _MapOrigin + id.xy;
+
+    float closestDistSq = 1.0e+9;
+    float secondClosestDistSq = 1.0e+9;
+    int closestIndex = -1;
+    int secondClosestIndex = -1;
+
+    for (uint i = 0; i < _AgentCount; i++)
+    {
+        float distSq = distance_sq(worldPos, _Agents[i].position);
+        if (distSq < closestDistSq)
+        {
+            secondClosestDistSq = closestDistSq;
+            secondClosestIndex = closestIndex;
+            closestDistSq = distSq;
+            closestIndex = i;
+        }
+        else if (distSq < secondClosestDistSq)
+        {
+            secondClosestDistSq = distSq;
+            secondClosestIndex = i;
+        }
+    }
+    
+    if (closestIndex == -1)
+    {
+        _Result[id.xy] = float4(NO_AGENT, NO_AGENT, 0, 0);
+        return;
+    }
+    
+    if (secondClosestIndex == -1)
+    {
+        _Result[id.xy] = float4(closestIndex, closestIndex, 0, 0);
+        return;
+    }
+    
+    float d1 = sqrt(closestDistSq);
+    float d2 = sqrt(secondClosestDistSq);
+    float blend = saturate(d1 / (d1 + d2 + 0.0001f));
+    
+    _Result[id.xy] = float4(closestIndex, secondClosestIndex, blend, 0);
+}
+
+[numthreads(8,8,1)]
+void DrawBorders (uint3 id : SV_DispatchThreadID)
+{
+    float4 myData = _Result[id.xy];
+    uint myIndex = (uint)myData.x;
+    
+    if (myIndex == NO_AGENT) return;
+
+    BiomeAgentData myAgent = _Agents[myIndex];
+    
+    for (int y = -(int)_BorderSize; y <= (int)_BorderSize; y++)
+    {
+        for (int x = -(int)_BorderSize; x <= (int)_BorderSize; x++)
+        {
+            if (x == 0 && y == 0) continue;
+            
+            // ИСПРАВЛЕНИЕ: Используем int2(x, y) для смещения
+            float4 neighborData = _Result[id.xy + int2(x, y)];
+            uint neighborIndex = (uint)neighborData.x;
+            
+            if (neighborIndex == NO_AGENT)
+            {
+                _Result[id.xy] = float4(NO_AGENT, NO_AGENT, 0, 0);
+                return;
+            }
+            
+            BiomeAgentData neighborAgent = _Agents[neighborIndex];
+            
+            // ИСПРАВЛЕНИЕ: Используем правильный регистр для uniqueInstanceId
+            if (myAgent.clusterId != neighborAgent.clusterId && myAgent.partnerId != neighborAgent.uniqueInstanceId)
+            {
+                _Result[id.xy] = float4(NO_AGENT, NO_AGENT, 0, 0);
+                return;
+            }
+        }
+    }
+}

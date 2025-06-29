@@ -14,13 +14,14 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   ID: 4
   VoxelName: 
+  category: 0
   isSolid: 1
   isTransparent: 0
   textureAtlasCoord: {x: 1, y: 0}
+  baseColor: {r: 0.21698111, g: 0, b: 0.1299992, a: 1}
+  GapWidth: 0.0254
+  GapColor: {r: 0.7264151, g: 0, b: 0.3857227, a: 1}
+  BevelWidth: 0.1
+  BevelStrength: 0.8
+  BevelDirection: -1
   destructionSound: {fileID: 0}
-  color: {r: 0.047169805, g: 0.047169805, b: 0.047169805, a: 1}
-  gapColor: {r: 0.8018868, g: 0, b: 0.54877466, a: 1}
-  smoothness: 0.4
-  metallic: 0.3
-  emissionColor: {r: 0.3018868, g: 0, b: 0, a: 1}
-  emissionStrength: 2
