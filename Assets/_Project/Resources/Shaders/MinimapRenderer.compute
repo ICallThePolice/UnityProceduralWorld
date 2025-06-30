@@ -1,0 +1,43 @@
+// ФАЙЛ: MinimapRenderer.compute (ФИНАЛЬНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ)
+#pragma kernel RenderMinimap
+
+// Выходная текстура, на которой мы рисуем
+RWTexture2D<float4> MinimapTexture;
+
+// Входные данные от CPU
+StructuredBuffer<float4> BiomeMap;      // Карта биомов региона (ID1, ID2, Blend, ClusterID)
+StructuredBuffer<float4> BiomeColors;   // Таблица цветов для каждого ID биома
+
+float2 PlayerWorldPos;
+float MinimapScale;
+int TextureSize;
+int RegionSize;
+float2 RegionOffset; // Мировые координаты левого нижнего угла региона
+
+[numthreads(8,8,1)]
+void RenderMinimap(uint3 id : SV_DispatchThreadID)
+{
+    // 1. Вычисляем, какой мировой координате соответствует текущий пиксель миникарты
+    float2 pixelOffset = (id.xy - (float2(TextureSize, TextureSize) / 2.0)) * MinimapScale;
+    float2 worldPos = PlayerWorldPos + pixelOffset;
+    
+    // 2. Определяем локальную координату внутри региона биомов (0 to RegionSize-1)
+    int2 biomeMapCoord = (int2)floor(worldPos - RegionOffset);
+
+    // 3. Проверяем, что мы не вышли за пределы данных региона
+    if (biomeMapCoord.x < 0 || biomeMapCoord.x >= RegionSize || biomeMapCoord.y < 0 || biomeMapCoord.y >= RegionSize)
+    {
+        MinimapTexture[id.xy] = float4(0.0, 0.0, 0.0, 1.0); // Рисуем черным за пределами карты
+        return;
+    }
+    
+    // 4. Преобразуем 2D координату в 1D индекс для доступа к буферу
+    uint biomeMapIndex1D = biomeMapCoord.x + biomeMapCoord.y * RegionSize;
+    
+    // 5. Читаем данные о биоме из готовой карты
+    float4 biomeData = BiomeMap[biomeMapIndex1D];
+    uint primaryID = (uint)biomeData.r; // Основной ID биома
+    
+    // 6. Берем нужный цвет из буфера цветов и рисуем пиксель на миникарте
+    MinimapTexture[id.xy] = BiomeColors[primaryID];
+}

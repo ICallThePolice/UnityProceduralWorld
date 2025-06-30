@@ -1,56 +1,65 @@
-// --- ФАЙЛ: WorldController.cs (ФИНАЛЬНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ) ---
+// --- ФАЙЛ: WorldController.cs (ФИНАЛЬНАЯ ВЕРСИЯ С РАБОТАЮЩЕЙ МИНИКАРТОЙ) ---
 using UnityEngine;
 using UnityEngine.UI;
 using System.Collections;
-using System.Collections.Generic;
-using System.Threading.Tasks;
-using Unity.Mathematics;
-using UnityEngine.Rendering;
+using System.Collections.Generic; // <-- Добавлено для Dictionary
 
 public class WorldController : MonoBehaviour
 {
     public static WorldController Instance { get; private set; }
 
+    [Header("Основные настройки")]
     public WorldSettingsSO worldSettings;
     public Transform player;
+    public BiomeMapSO biomeMap;
+    public ComputeShader minimapShader;
 
-    [Header("UI")]
+    [Header("UI для отладки")]
     public RawImage minimapDisplay;
-    [Tooltip("Как часто (в секундах) миникарта будет пытаться обновиться.")]
-    public float minimapUpdateInterval = 0.5f;
-    [Tooltip("Масштаб миникарты. 1.0 = 1 пиксель на 1 юнит мира.")]
-    public float minimapScale = 2.0f;
+    
+    [Tooltip("Как часто (в секундах) миникарта будет обновляться.")]
+    public float minimapUpdateInterval = 0.1f;
+    [Tooltip("Масштаб миникарты. 1 = 1 пиксель на 1 юнит мира.")]
+    public float minimapScale = 4.0f;
 
     private ChunkManager chunkManager;
     private VoxelGenerationPipeline generationPipeline;
+    private BiomeManager biomeManager;
     private float chunkUpdateTimer;
+    private ComputeBuffer biomeColorBuffer;
+    private RenderTexture minimapRenderTexture;
+    private readonly int regionSize = 256;
 
     private void Awake()
     {
         Instance = this;
-        if (worldSettings == null || player == null || BiomeManager.Instance == null) 
+        if (worldSettings == null || player == null || biomeMap == null) 
         { 
             Debug.LogError("Ключевые компоненты не назначены в WorldController!");
             this.enabled = false; 
             return; 
         }
 
-        SetupShaderGlobals();
+        // Здесь мы создаем и инициализируем BiomeManager
+        biomeManager = gameObject.AddComponent<BiomeManager>();
+        biomeManager.worldSettings = this.worldSettings;
+        biomeManager.biomeMap = this.biomeMap;
+        biomeManager.Initialize(worldSettings);
         
-        BiomeManager.Instance.Initialize(worldSettings); 
-        generationPipeline = new VoxelGenerationPipeline(worldSettings, BiomeManager.Instance);
+        generationPipeline = new VoxelGenerationPipeline(worldSettings, biomeManager); 
         chunkManager = new ChunkManager(generationPipeline, worldSettings, this.transform);
     }
     
     private void Start()
     {
-        if (minimapDisplay != null && worldSettings.biomeMapComputeShader != null)
+        InitializeBiomeColorBuffer();
+        if (minimapDisplay != null && minimapShader != null)
         {
             StartCoroutine(MinimapUpdateRoutine());
         }
-        else
+        else if (minimapShader == null)
         {
-            Debug.LogError("Миникарта или ее Compute Shader не назначены, корутина не будет запущена.");
+            Debug.LogWarning("Шейдер для миникарты (Minimap Shader) не назначен в инспекторе WorldController. Миникарта не будет работать.");
         }
     }
 
@@ -72,74 +81,81 @@ public class WorldController : MonoBehaviour
     {
         generationPipeline?.Dispose();
         chunkManager?.Dispose();
+        biomeColorBuffer?.Release();
+        minimapRenderTexture?.Release();
     }
     
     private IEnumerator MinimapUpdateRoutine()
     {
-        var mapDescriptor = new RenderTextureDescriptor(512, 512, RenderTextureFormat.ARGB32) { enableRandomWrite = true };
-        RenderTexture minimapTexture = new RenderTexture(mapDescriptor);
-        minimapTexture.Create();
-        minimapDisplay.texture = minimapTexture;
-
-        var biomeMapCompute = worldSettings.biomeMapComputeShader;
-        int kernel = biomeMapCompute.FindKernel("VisualizeGrid");
-
+        int textureSize = 256;
+        minimapRenderTexture = new RenderTexture(textureSize, textureSize, 0, RenderTextureFormat.ARGB32)
+        {
+            enableRandomWrite = true
+        };
+        minimapRenderTexture.Create();
+        minimapDisplay.texture = minimapRenderTexture;
+        
+        int kernel = minimapShader.FindKernel("RenderMinimap");
+        minimapShader.SetBuffer(kernel, "BiomeColors", biomeColorBuffer);
+        minimapShader.SetTexture(kernel, "MinimapTexture", minimapRenderTexture);
+        minimapShader.SetInt("TextureSize", textureSize);
+        minimapShader.SetInt("RegionSize", regionSize);
+        
         while (true)
         {
-            // ИСПРАВЛЕНО: Используем BiomeManager.Instance для доступа к regionSize
-            int regionX = Mathf.FloorToInt(player.position.x / BiomeManager.Instance.regionSize);
-            int regionZ = Mathf.FloorToInt(player.position.z / BiomeManager.Instance.regionSize);
-            Vector2Int playerRegion = new Vector2Int(regionX, regionZ);
+            Vector2Int playerRegionCoords = new Vector2Int(
+                Mathf.FloorToInt(player.position.x / regionSize),
+                Mathf.FloorToInt(player.position.z / regionSize)
+            );
             
-            Task<Dictionary<int2, int>> simulationTask = BiomeManager.Instance.GetBiomeSiteGridFor(playerRegion);
-            
-            while (!simulationTask.IsCompleted)
-            {
-                yield return null;
-            }
+            RegionData regionData = generationPipeline.GetRegionData(playerRegionCoords);
 
-            Dictionary<int2, int> siteGrid = simulationTask.Result;
-            
-            if (siteGrid != null && siteGrid.Count > 0)
+            if(regionData != null && regionData.mapData.IsCreated)
             {
-                var siteDataList = new List<float4>();
-                foreach (var kvp in siteGrid)
+                // --- ИСПРАВЛЕННЫЙ БЛОК ---
+                // Теперь Dispatch вызывается внутри using, чтобы буфер не успел удалиться
+                using (var biomeMapBuffer = new ComputeBuffer(regionData.mapData.Length, sizeof(float) * 4))
                 {
-                    var agent = BiomeManager.Instance.GetAgent(kvp.Value);
-                    if (agent != null)
-                    {
-                       siteDataList.Add(new float4(kvp.Key.x, kvp.Key.y, agent.settings.biome.BiomeBlock.ID, agent.isPaired ? 1 : 0));
-                    }
-                }
-                
-                if (siteDataList.Count > 0)
-                {
-                    var siteBuffer = new ComputeBuffer(siteDataList.Count, sizeof(float) * 4);
-                    siteBuffer.SetData(siteDataList);
-
-                    biomeMapCompute.SetBuffer(kernel, "_SiteData", siteBuffer);
-                    biomeMapCompute.SetInt("_SiteCount", siteDataList.Count);
-                    biomeMapCompute.SetTexture(kernel, "_Result", minimapTexture);
-                    biomeMapCompute.SetVector("_PlayerPos", new float4(player.position.x, player.position.z, 0, 0));
-                    biomeMapCompute.SetFloat("_MinimapScale", minimapScale);
-                    biomeMapCompute.Dispatch(kernel, 512 / 8, 512 / 8, 1);
+                    // Конвертируем NativeArray<Color> в NativeArray<Vector4> для буфера
+                    var mapDataVector4 = regionData.mapData.Reinterpret<Vector4>();
+                    biomeMapBuffer.SetData(mapDataVector4);
                     
-                    siteBuffer.Release();
+                    minimapShader.SetBuffer(kernel, "BiomeMap", biomeMapBuffer);
+                    
+                    minimapShader.SetVector("PlayerWorldPos", new Vector4(player.position.x, player.position.z, 0, 0));
+                    minimapShader.SetVector("RegionOffset", new Vector4(playerRegionCoords.x * regionSize, playerRegionCoords.y * regionSize, 0, 0));
+                    minimapShader.SetFloat("MinimapScale", minimapScale);
+
+                    int threadGroups = Mathf.CeilToInt(textureSize / 8.0f);
+                    minimapShader.Dispatch(kernel, threadGroups, threadGroups, 1);
                 }
             }
             
             yield return new WaitForSeconds(minimapUpdateInterval);
         }
     }
-
-    private void SetupShaderGlobals()
+    
+    private void InitializeBiomeColorBuffer()
     {
-        if (worldSettings.worldMaterial != null && worldSettings.worldTextureAtlas != null)
+        var colors = new List<Vector4>();
+        ushort maxId = 0;
+        foreach (var voxelType in worldSettings.voxelTypes)
         {
-            worldSettings.worldMaterial.SetTexture("_MainTex", worldSettings.worldTextureAtlas);
+            if (voxelType.ID > maxId) maxId = voxelType.ID;
         }
+        for (int i = 0; i <= maxId + 1; i++)
+        {
+            colors.Add(Color.black); 
+        }
+        foreach (var voxelType in worldSettings.voxelTypes)
+        {
+            colors[voxelType.ID] = new Vector4(voxelType.baseColor.r, voxelType.baseColor.g, voxelType.baseColor.b, 1);
+        }
+        
+        biomeColorBuffer = new ComputeBuffer(colors.Count, sizeof(float) * 4);
+        biomeColorBuffer.SetData(colors);
     }
-
+    
     private Vector3Int GetChunkPositionFromWorldPos(Vector3 worldPosition)
     {
         int x = Mathf.FloorToInt(worldPosition.x / Chunk.Width);

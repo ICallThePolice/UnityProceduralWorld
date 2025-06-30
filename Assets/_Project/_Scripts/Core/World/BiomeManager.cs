@@ -1,143 +1,120 @@
-// --- ФАЙЛ: BiomeManager.cs (ПЕРЕРАБОТАННАЯ ВЕРСИЯ) ---
+// --- ФАЙЛ: BiomeManager.cs (НОВАЯ, БЫСТРАЯ ВЕРСИЯ) ---
 using UnityEngine;
-using System.Collections.Generic;
-using System.Threading.Tasks; // Для асинхронных задач
 using Unity.Mathematics;
+using System.Collections.Generic;
+using System.Linq;
 
 public class BiomeManager : MonoBehaviour
 {
     public static BiomeManager Instance { get; private set; }
-
-    [Header("Источники Биомов")]
-    public List<BiomePlacementSettingsSO> availableBiomes;
-
-    [Header("Параметры Размещения")]
-    public int regionSize = 1024;
-    public float minDistanceBetweenSeeds = 128f;
-    public int simulationSteps = 150; // Увеличим для более полных биомов
-
-    [Header("Динамическая агрессивность")]
-    public float maxAggressivenessDistance = 5000f;
-    public int baseSeedsPerRegion = 5;
-    public int maxSeedsPerRegion = 10;
     
-    // --- АСИНХРОННЫЙ КЭШ ---
-    // Кэшируем не результат, а саму ЗАДАЧУ по симуляции.
-    private readonly Dictionary<Vector2Int, Task<Dictionary<int2, int>>> runningSimulations = new Dictionary<Vector2Int, Task<Dictionary<int2, int>>>();
-    private readonly Dictionary<int, BiomeAgent> allAgents = new Dictionary<int, BiomeAgent>();
-
-    private int placementSeed;
-    private int nextInstanceId = 1;
-    private readonly object lockObject = new object(); // Для потокобезопасности
+    // Эти поля вы настраиваете в инспекторе
+    public WorldSettingsSO worldSettings;
+    public BiomeMapSO biomeMap; // Перетащите сюда ваш ассет "DefaultBiomeMap"
+    
+    private FastNoiseLite chaosNoise;
+    private FastNoiseLite saturationNoise;
+    private FastNoiseLite warpNoise; // Шум для искажения границ (имитация агрессивности)
 
     void Awake()
     {
         Instance = this;
     }
 
-    public void Initialize(WorldSettingsSO worldSettings)
+    public void Initialize(WorldSettingsSO settings)
     {
-        if (worldSettings == null) { this.enabled = false; return; }
-        placementSeed = worldSettings.heightmapNoiseSettings.seed;
-    }
-
-    /// <summary>
-    /// Асинхронно получает или запускает симуляцию для региона.
-    /// </summary>
-    public Task<Dictionary<int2, int>> GetBiomeSiteGridFor(Vector2Int regionCoords)
-    {
-        lock (lockObject) // Блокируем доступ к словарю из разных потоков
-        {
-            if (runningSimulations.TryGetValue(regionCoords, out var simulationTask))
-            {
-                return simulationTask; // Если задача уже запущена, просто возвращаем ее
-            }
-
-            // Если задачи нет, создаем и запускаем новую в фоновом потоке
-            var newSimulationTask = Task.Run(() =>
-            {
-                var initialAgents = new List<BiomeAgent>();
-                for (int x = -1; x <= 1; x++)
-                {
-                    for (int z = -1; z <= 1; z++)
-                    {
-                        GenerateSeedsForRegion(regionCoords + new Vector2Int(x, z), initialAgents);
-                    }
-                }
-
-                var simulator = new BiomeSimulator(initialAgents, simulationSteps);
-                return simulator.Simulate();
-            });
-
-            runningSimulations[regionCoords] = newSimulationTask;
-            return newSimulationTask;
-        }
-    }
-
-    /// <summary>
-    /// Создает "семена" биомов для ОДНОГО региона с учетом дистанции от центра и минимального расстояния между собой.
-    /// </summary>
-    private void GenerateSeedsForRegion(Vector2Int regionCoords, List<BiomeAgent> agentList)
-    {
-        int regionSeed = placementSeed + regionCoords.x * 16777619 + regionCoords.y * 3145739;
-        var random = new System.Random(regionSeed);
-
-        float regionCenterDist = Vector2.Distance(regionCoords, Vector2.zero) * regionSize;
-        float seedsLerpFactor = Mathf.Clamp01(regionCenterDist / maxAggressivenessDistance);
-        int seedsToSpawn = (int)Mathf.Lerp(baseSeedsPerRegion, maxSeedsPerRegion, seedsLerpFactor);
+        this.worldSettings = settings;
         
-        List<float2> spawnedPositions = new List<float2>();
-
-        for (int i = 0; i < seedsToSpawn; i++)
+        if (this.worldSettings == null) 
         {
-            for(int attempt = 0; attempt < 10; attempt++)
-            {
-                var settings = availableBiomes[random.Next(0, availableBiomes.Count)];
-                var position = new float2(
-                    (regionCoords.x + (float)random.NextDouble()) * regionSize,
-                    (regionCoords.y + (float)random.NextDouble()) * regionSize
-                );
-
-                bool isTooClose = false;
-                foreach (var existingPos in spawnedPositions)
-                {
-                    if (math.distance(position, existingPos) < minDistanceBetweenSeeds)
-                    {
-                        isTooClose = true;
-                        break;
-                    }
-                }
-
-                if (isTooClose) continue;
-
-                float distanceToOrigin = math.distance(position, float2.zero);
-                float aggressivenessFactor = Mathf.Clamp01(distanceToOrigin / maxAggressivenessDistance);
-
-                var newAgent = new BiomeAgent(nextInstanceId++, position, settings, aggressivenessFactor);
-                
-                lock(lockObject) // Добавляем агента в общий список потокобезопасно
-                {
-                    if (!allAgents.ContainsKey(newAgent.uniqueInstanceId))
-                    {
-                        allAgents.Add(newAgent.uniqueInstanceId, newAgent);
-                    }
-                }
-                
-                agentList.Add(newAgent);
-                spawnedPositions.Add(position);
-                break;
-            }
+            Debug.LogError("WorldSettings не назначены в WorldController! Генерация невозможна.");
+            this.enabled = false; 
+            return; 
         }
-    }
-    /// <summary>
-    /// Возвращает агента по его уникальному ID.
-    /// </summary>
-    public BiomeAgent GetAgent(int agentId)
-    {
-        lock(lockObject)
+        if (this.biomeMap == null)
         {
-            allAgents.TryGetValue(agentId, out var agent);
-            return agent;
+            Debug.LogError("BiomeMap не назначен в WorldController! Генерация невозможна.");
+            this.enabled = false;
+            return;
+        }
+        if (this.biomeMap.biomeMappings == null || this.biomeMap.biomeMappings.Length == 0)
+        {
+            Debug.LogError("Ассет BiomeMap пуст (не содержит ни одного биома)! Генерация невозможна.");
+            this.enabled = false;
+            return;
+        }
+
+        if (this.worldSettings == null || biomeMap == null || biomeMap.biomeMappings.Length == 0)
+        {
+            Debug.LogError("WorldSettings или BiomeMap не назначены или пусты в BiomeManager! Генерация невозможна.");
+            this.enabled = false;
+            return;
+        }
+
+        // Инициализируем все генераторы шума на основе настроек
+        chaosNoise = new FastNoiseLite(worldSettings.chaosNoiseSettings.seed);
+        chaosNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+        chaosNoise.SetFrequency(worldSettings.chaosNoiseSettings.scale);
+        
+        saturationNoise = new FastNoiseLite(worldSettings.saturationNoiseSettings.seed);
+        saturationNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+        saturationNoise.SetFrequency(worldSettings.saturationNoiseSettings.scale);
+
+        // Этот шум можно добавить в WorldSettingsSO по аналогии с другими
+        warpNoise = new FastNoiseLite(worldSettings.detailNoiseSettings.seed); 
+        warpNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+        warpNoise.SetFrequency(worldSettings.detailNoiseSettings.scale * 5f); // Искажения должны быть более мелкими
+    }
+
+    /// <summary>
+    /// Мгновенно определяет основной и вторичный биом для точки мира, а также фактор их смешивания.
+    /// </summary>
+    public void GetBiomeDataAt(float2 worldPos, out ushort primaryID, out ushort secondaryID, out float blendFactor)
+    {
+        // 1. Вычисляем значения "климатических" шумов
+        float chaosValue = chaosNoise.GetNoise(worldPos.x, worldPos.y);
+        float saturationValue = saturationNoise.GetNoise(worldPos.x, worldPos.y);
+        Vector2 targetPosition = new Vector2(chaosValue, saturationValue);
+
+        // 2. Находим два ближайших биома на карте биомов (в BiomeMapSO)
+        var sortedBiomes = biomeMap.biomeMappings
+            .OrderBy(mapping => Vector2.SqrMagnitude(mapping.position - targetPosition))
+            .Take(2)
+            .ToList();
+
+        // 3. Обрабатываем результат
+        if (sortedBiomes.Count == 0)
+        {
+            primaryID = worldSettings.globalBiomeBlock.ID;
+            secondaryID = worldSettings.globalBiomeBlock.ID;
+            blendFactor = 0;
+            return;
+        }
+
+        BiomeMapping closest = sortedBiomes[0];
+        primaryID = closest.biome.BiomeBlock.ID;
+
+        // 4. Если есть второй биом, рассчитываем смешивание
+        if (sortedBiomes.Count > 1)
+        {
+            BiomeMapping secondClosest = sortedBiomes[1];
+            secondaryID = secondClosest.biome.BiomeBlock.ID;
+            
+            float distToClosest = Mathf.Sqrt(Vector2.SqrMagnitude(closest.position - targetPosition));
+            float distToSecondClosest = Mathf.Sqrt(Vector2.SqrMagnitude(secondClosest.position - targetPosition));
+            float totalDist = distToClosest + distToSecondClosest;
+            
+            // Базовый фактор смешивания
+            float baseBlend = (totalDist > 0.001f) ? distToClosest / totalDist : 0f;
+
+            // 5. Применяем искажение границы (имитация агрессивности)
+            float warpValue = warpNoise.GetNoise(worldPos.x, worldPos.y) * 0.1f; // небольшой фактор искажения
+            blendFactor = Mathf.Clamp01(baseBlend + warpValue);
+        }
+        else
+        {
+            secondaryID = primaryID;
+            blendFactor = 0;
         }
     }
 }

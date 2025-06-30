@@ -52,13 +52,12 @@ public class ChunkManager
         // 3. Выгружаем "устаревшие" чанки.
         foreach (var chunkPos in chunksToUnload)
         {
-            // Отправляем команду отмены в конвейер.
-            // Это предотвратит запуск новых Job'ов для этого чанка.
             pipeline.CancelChunkGeneration(chunkPos);
             
             if (activeChunks.TryGetValue(chunkPos, out Chunk chunk))
             {
-                chunk.Dispose(); // Используем наш новый метод для полной очистки
+                //Debug.Log($"[ChunkManager] Уничтожение чанка {chunkPos} из-за неактивности"); // <-- ДОБАВИТЬ ЛОГ
+                chunk.Dispose();
                 activeChunks.Remove(chunkPos);
             }
         }
@@ -68,6 +67,7 @@ public class ChunkManager
         {
             if (!activeChunks.ContainsKey(chunkPos))
             {
+                //Debug.Log($"[ChunkManager] Создание нового чанка в позиции {chunkPos}"); // <-- ДОБАВИТЬ ЛОГ
                 Chunk newChunk = new Chunk(chunkPos);
                 activeChunks.Add(chunkPos, newChunk);
                 pipeline.RequestDataGeneration(newChunk);

@@ -13,7 +13,9 @@ public class Chunk
     public Mesh meshData;
 
     public bool isDataGenerated = false;
+    public bool isDataJobRunning = false;
     public bool isMeshGenerated = false;
+    public bool isMeshJobRunning = false;
     public float lastActiveTime;
 
     // --- Храним все вычисленные данные ---
@@ -32,7 +34,7 @@ public class Chunk
     {
         this.chunkPosition = position;
         this.lastActiveTime = Time.time;
-        // Инициализируем все массивы
+
         primaryBlockIDs = new ushort[Size];
         finalColors = new Color32[Size];
         finalUv0s = new float2[Size];

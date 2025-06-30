@@ -1,106 +1,89 @@
-#pragma kernel FillMapWithBlend
-#pragma kernel DrawBorders
+// ФАЙЛ: BiomeMapGenerator.compute (ИСПРАВЛЕННАЯ ВЕРСИЯ)
+#pragma kernel GenerateBiomeMap
 
-float distance_sq(float2 a, float2 b) { return dot(a - b, a - b); }
+// Входные данные от CPU
+RWTexture2D<float4> Result;
+float2 WorldOffset;
+float AtlasSize;
+StructuredBuffer<float3> BiomeData;
 
-struct BiomeAgentData
+// --- Упрощенная и рабочая версия шума ---
+float2 hash(float2 p)
 {
-    float2 position;
-    float maxRadius;
-    uint biomeTypeId;
-    uint uniqueInstanceId;
-    uint partnerId;
-    uint clusterId;
-};
+    p = float2(dot(p, float2(127.1, 311.7)),
+               dot(p, float2(269.5, 183.3)));
+    return -1.0 + 2.0 * frac(sin(p) * 43758.5453123);
+}
 
-#define NO_AGENT 0xFFFFFFFF
+float simplex_noise(float2 p) {
+    const float K1 = 0.366025404; // (sqrt(3)-1)/2
+    const float K2 = 0.211324865; // (3-sqrt(3))/6
 
-StructuredBuffer<BiomeAgentData> _Agents;
-uint _AgentCount;
-RWTexture2D<float4> _Result;
-float2 _MapOrigin;
-uint _BorderSize;
+    float2 i = floor(p + (p.x + p.y) * K1);
+    float2 a = p - i + (i.x + i.y) * K2;
+    float2 o = (a.x > a.y) ? float2(1.0, 0.0) : float2(0.0, 1.0);
+    float2 b = a - o + K2;
+    float2 c = a - 1.0 + 2.0 * K2;
+
+    float3 h = max(0.5 - float3(dot(a, a), dot(b, b), dot(c, c)), 0.0);
+    // Исправлена ошибка в вызове hash()
+    float3 n = h * h * h * h * float3(dot(a, hash(i)), dot(b, hash(i + o)), dot(c, hash(i + 1.0)));
+
+    return dot(n, float3(70.0, 70.0, 70.0));
+}
+
+float GetNoise(float2 pos, float frequency)
+{
+    return simplex_noise(pos * frequency);
+}
+// --- КОНЕЦ БЛОКА ШУМА ---
 
 [numthreads(8,8,1)]
-void FillMapWithBlend (uint3 id : SV_DispatchThreadID)
+void GenerateBiomeMap (uint3 id : SV_DispatchThreadID)
 {
-    float2 worldPos = _MapOrigin + id.xy;
+    float2 globalPos = WorldOffset + id.xy;
 
-    float closestDistSq = 1.0e+9;
-    float secondClosestDistSq = 1.0e+9;
-    int closestIndex = -1;
-    int secondClosestIndex = -1;
+    // Параметры шума (можно будет вынести в настройки)
+    float chaosFreq = 0.002;
+    float saturationFreq = 0.002;
 
-    for (uint i = 0; i < _AgentCount; i++)
+    float chaos = GetNoise(globalPos, chaosFreq);
+    float saturation = GetNoise(globalPos + float2(123.4, -543.2), saturationFreq);
+    float2 targetPos = float2(chaos, saturation);
+
+    float closestDistSq = 1000000.0;
+    float secondClosestDistSq = 1000000.0;
+    uint closestIdx = 0;
+    uint secondClosestIdx = 0;
+
+    for (uint i = 0; i < (uint)AtlasSize; i++)
     {
-        float distSq = distance_sq(worldPos, _Agents[i].position);
+        float2 biomePos = BiomeData[i].yz;
+        float distSq = dot(targetPos - biomePos, targetPos - biomePos);
         if (distSq < closestDistSq)
         {
             secondClosestDistSq = closestDistSq;
-            secondClosestIndex = closestIndex;
+            secondClosestIdx = closestIdx;
             closestDistSq = distSq;
-            closestIndex = i;
+            closestIdx = i;
         }
         else if (distSq < secondClosestDistSq)
         {
             secondClosestDistSq = distSq;
-            secondClosestIndex = i;
+            secondClosestIdx = i;
         }
     }
     
-    if (closestIndex == -1)
+    float blendFactor = 0.0;
+    if (AtlasSize > 1 && secondClosestDistSq < 999999.0)
     {
-        _Result[id.xy] = float4(NO_AGENT, NO_AGENT, 0, 0);
-        return;
+        float dist1 = sqrt(closestDistSq);
+        float dist2 = sqrt(secondClosestDistSq);
+        blendFactor = saturate(dist1 / (dist1 + dist2 + 0.0001));
     }
     
-    if (secondClosestIndex == -1)
-    {
-        _Result[id.xy] = float4(closestIndex, closestIndex, 0, 0);
-        return;
-    }
+    float primaryID = BiomeData[closestIdx].x;
+    float secondaryID = (AtlasSize > 1) ? BiomeData[secondClosestIdx].x : primaryID;
     
-    float d1 = sqrt(closestDistSq);
-    float d2 = sqrt(secondClosestDistSq);
-    float blend = saturate(d1 / (d1 + d2 + 0.0001f));
-    
-    _Result[id.xy] = float4(closestIndex, secondClosestIndex, blend, 0);
-}
-
-[numthreads(8,8,1)]
-void DrawBorders (uint3 id : SV_DispatchThreadID)
-{
-    float4 myData = _Result[id.xy];
-    uint myIndex = (uint)myData.x;
-    
-    if (myIndex == NO_AGENT) return;
-
-    BiomeAgentData myAgent = _Agents[myIndex];
-    
-    for (int y = -(int)_BorderSize; y <= (int)_BorderSize; y++)
-    {
-        for (int x = -(int)_BorderSize; x <= (int)_BorderSize; x++)
-        {
-            if (x == 0 && y == 0) continue;
-            
-            // ИСПРАВЛЕНИЕ: Используем int2(x, y) для смещения
-            float4 neighborData = _Result[id.xy + int2(x, y)];
-            uint neighborIndex = (uint)neighborData.x;
-            
-            if (neighborIndex == NO_AGENT)
-            {
-                _Result[id.xy] = float4(NO_AGENT, NO_AGENT, 0, 0);
-                return;
-            }
-            
-            BiomeAgentData neighborAgent = _Agents[neighborIndex];
-            
-            // ИСПРАВЛЕНИЕ: Используем правильный регистр для uniqueInstanceId
-            if (myAgent.clusterId != neighborAgent.clusterId && myAgent.partnerId != neighborAgent.uniqueInstanceId)
-            {
-                _Result[id.xy] = float4(NO_AGENT, NO_AGENT, 0, 0);
-                return;
-            }
-        }
-    }
+    Result[id.xy] = float4(primaryID, secondaryID, blendFactor, 0);
 }

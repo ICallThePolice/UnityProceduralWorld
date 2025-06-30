@@ -1,4 +1,4 @@
-// --- ФАЙЛ: GenerationJob.cs (ВОЗВРАЩАЕМ ОРИГИНАЛЬНУЮ ЛОГИКУ) ---
+// --- ФАЙЛ: _Project/_Scripts/Core/Jobs/GenerationJob.cs (ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ) ---
 using UnityEngine;
 using Unity.Burst;
 using Unity.Collections;
@@ -11,7 +11,6 @@ public struct GenerationJob : IJob
     [ReadOnly] public Vector3Int chunkPosition;
     [ReadOnly] public FastNoiseLite heightMapNoise;
     
-    // ВХОДНЫЕ КАРТЫ ДЛЯ ЧАНКА
     [ReadOnly] public NativeArray<ushort> chunkPrimaryIdMap; 
     [ReadOnly] public NativeArray<ushort> chunkSecondaryIdMap;
     [ReadOnly] public NativeArray<float> chunkBlendMap;
@@ -30,7 +29,6 @@ public struct GenerationJob : IJob
     [WriteOnly] public NativeArray<float> finalGapWidths;
     [WriteOnly] public NativeArray<float3> finalBevelData;
     
-
     public void Execute()
     {
         for (int x = 0; x < Chunk.Width; x++)
@@ -38,29 +36,40 @@ public struct GenerationJob : IJob
             for (int z = 0; z < Chunk.Width; z++)
             {
                 int mapIndex = x + z * Chunk.Width;
+                
                 ushort primaryID = chunkPrimaryIdMap[mapIndex];
                 ushort secondaryID = chunkSecondaryIdMap[mapIndex];
-                float blendFactor = chunkBlendMap[mapIndex];
 
-                if (primaryID == 0) primaryID = globalBiomeBlockID;
-                if (secondaryID == 0) secondaryID = primaryID; // Если второй биом - нейтральная зона, считаем его тем же, что и основной
-
+                // --- ЗАЩИТА ОТ НЕВЕРНЫХ ID ---
+                // Если ID выходит за пределы карты, используем глобальный ID по умолчанию
+                if (primaryID >= voxelTypeMap.Length) primaryID = globalBiomeBlockID;
+                if (secondaryID >= voxelTypeMap.Length) secondaryID = globalBiomeBlockID;
+                
                 VoxelTypeDataBurst primaryProps = voxelTypeMap[primaryID];
                 VoxelTypeDataBurst secondaryProps = voxelTypeMap[secondaryID];
                 
                 var worldPos = new float2(chunkPosition.x * Chunk.Width + x, chunkPosition.z * Chunk.Width + z);
-                float heightValue = heightMapNoise.GetNoise(worldPos.x, worldPos.y);
-                int surfaceHeight = (int)math.remap(-1, 1, 10, Chunk.Height - 10, heightValue);
                 
+                // --- ЛОГИКА ВЫСОТЫ ---
+                float heightValue = heightMapNoise.GetNoise(worldPos.x, worldPos.y);
+                int baseSurfaceHeight = (int)math.remap(-1, 1, 10, 25, heightValue); // Базовая высота ландшафта
+                
+                // Простое изменение высоты: биомы с ID > 1 (не глобальный) будут выше
+                int biomeHeightOffset = primaryID > 1 ? 5 : 0;
+                int surfaceHeight = baseSurfaceHeight + biomeHeightOffset;
+                surfaceHeight = math.clamp(surfaceHeight, 1, Chunk.Height - 1);
+
                 for (int y = 0; y < Chunk.Height; y++)
                 {
                     int voxelIndex = Chunk.GetVoxelIndex(x, y, z);
-                    if (y >= surfaceHeight) { 
-                        primaryBlockIDs[voxelIndex] = 0;
+                    if (y >= surfaceHeight) 
+                    { 
+                        primaryBlockIDs[voxelIndex] = 0; // Air
                         continue; 
                     }
 
-                    // --- ЗАПОЛНЯЕМ ДАННЫЕ С УЧЕТОМ СМЕШИВАНИЯ ДЛЯ ШЕЙДЕРА ---
+                    float blendFactor = chunkBlendMap[mapIndex];
+                    
                     primaryBlockIDs[voxelIndex] = primaryProps.id;
                     finalColors[voxelIndex] = Color.Lerp(primaryProps.baseColor, secondaryProps.baseColor, blendFactor);
                     finalUv0s[voxelIndex] = primaryProps.baseUV;
@@ -70,7 +79,6 @@ public struct GenerationJob : IJob
                     finalGapWidths[voxelIndex] = math.lerp(primaryProps.gapWidth, secondaryProps.gapWidth, blendFactor);
                     finalBevelData[voxelIndex] = math.lerp(primaryProps.bevelData, secondaryProps.bevelData, blendFactor);
                     
-                    // Оверлеи и эмиттеры пока оставим без смешивания для простоты
                     finalEmissionData[voxelIndex] = float4.zero; 
                     finalMaterialProps[voxelIndex] = new float2(0.1f, 0f);
                 }
