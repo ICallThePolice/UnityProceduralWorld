@@ -1,11 +1,11 @@
 using UnityEngine;
 using Unity.Collections;
 using Unity.Jobs;
-using UnityEngine.Rendering;
 using Unity.Mathematics;
+using UnityEngine.Rendering;
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using System.Threading.Tasks;
 
 public class VoxelGenerationPipeline
 {
@@ -20,13 +20,11 @@ public class VoxelGenerationPipeline
 
     private NativeArray<VoxelTypeDataBurst> voxelTypeMap;
     private NativeArray<VoxelOverlayDataBurst> voxelOverlayMap;
-    private BiomeMapGPUGenerator mapGenerator;
 
     public VoxelGenerationPipeline(WorldSettingsSO settings, BiomeManager biomeManager)
     {
         this.settings = settings;
         this.biomeManager = biomeManager;
-        this.mapGenerator = new BiomeMapGPUGenerator(settings.biomeMapComputeShader);
         InitializeVoxelTypeMap();
         InitializeVoxelOverlayMap();
     }
@@ -35,33 +33,28 @@ public class VoxelGenerationPipeline
     public void RequestMeshGeneration(Chunk chunk) { if (!chunksToGenerateMesh.Contains(chunk) && !chunk.isMeshGenerated) chunksToGenerateMesh.Add(chunk); }
     public void CancelChunkGeneration(Vector3Int chunkPos)
     {
-        chunksToGenerateData.RemoveAll(chunk => chunk.chunkPosition == chunkPos);
-        chunksToGenerateMesh.RemoveAll(chunk => chunk.chunkPosition == chunkPos);
+        chunksToGenerateData.RemoveAll(c => c.chunkPosition == chunkPos);
+        chunksToGenerateMesh.RemoveAll(c => c.chunkPosition == chunkPos);
     }
 
+    #region Initialization
     private void InitializeVoxelTypeMap()
     {
         if (settings.voxelTypes == null || settings.voxelTypes.Count == 0) return;
-        
         ushort maxId = 0;
         foreach (var voxelType in settings.voxelTypes)
         {
             if (voxelType != null && voxelType.ID > maxId) maxId = voxelType.ID;
         }
-
         voxelTypeMap = new NativeArray<VoxelTypeDataBurst>(maxId + 1, Allocator.Persistent);
-
         foreach (var voxelType in settings.voxelTypes)
         {
             if (voxelType == null) continue;
             voxelTypeMap[voxelType.ID] = new VoxelTypeDataBurst
             {
-                id = voxelType.ID,
-                isSolid = voxelType.isSolid,
-                baseColor = voxelType.baseColor,
+                id = voxelType.ID, isSolid = voxelType.isSolid, baseColor = voxelType.baseColor,
                 baseUV = new float2(voxelType.textureAtlasCoord.x, voxelType.textureAtlasCoord.y),
-                gapWidth = voxelType.GapWidth,
-                gapColor = voxelType.GapColor,
+                gapWidth = voxelType.GapWidth, gapColor = voxelType.GapColor,
                 bevelData = new float3(voxelType.BevelWidth, voxelType.BevelStrength, voxelType.BevelDirection)
             };
         }
@@ -74,32 +67,27 @@ public class VoxelGenerationPipeline
             voxelOverlayMap = new NativeArray<VoxelOverlayDataBurst>(0, Allocator.Persistent);
             return;
         }
-        
         ushort maxId = 0;
         foreach (var overlay in settings.voxelOverlays)
         {
             if (overlay != null && overlay.OverlayID > maxId) maxId = overlay.OverlayID;
         }
-
         voxelOverlayMap = new NativeArray<VoxelOverlayDataBurst>(maxId + 1, Allocator.Persistent);
-
         foreach (var overlay in settings.voxelOverlays)
         {
             if (overlay == null) continue;
             voxelOverlayMap[overlay.OverlayID] = new VoxelOverlayDataBurst
             {
-                id = overlay.OverlayID,
-                priority = overlay.Priority,
-                tintColor = overlay.TintColor,
+                id = overlay.OverlayID, priority = overlay.Priority, tintColor = overlay.TintColor,
                 overlayUV = new float2(overlay.textureAtlasCoord.x, overlay.textureAtlasCoord.y),
-                gapWidth = overlay.GapWidth,
-                gapColor = overlay.GapColor,
+                gapWidth = overlay.GapWidth, gapColor = overlay.GapColor,
                 materialProps = new float2(overlay.Smoothness, overlay.Metallic),
                 emissionData = new float4(overlay.EmissionColor.r, overlay.EmissionColor.g, overlay.EmissionColor.b, overlay.EmissionStrength),
                 bevelData = new float3(overlay.BevelWidth, overlay.BevelStrength, overlay.BevelDirection)
             };
         }
     }
+    #endregion
 
     public void ProcessQueues(Func<Vector3Int, Chunk> getChunkCallback)
     {
@@ -107,83 +95,97 @@ public class VoxelGenerationPipeline
         ProcessMeshGenerationQueue(getChunkCallback);
     }
 
+    /// <summary>
+    /// Полностью переработанный метод для подготовки данных чанка.
+    /// </summary>
     private void ProcessDataGenerationQueue()
     {
-        if (runningDataJobs.Count >= settings.maxMeshJobsPerFrame || chunksToGenerateData.Count == 0) return;
-
-        Chunk chunkToProcess = chunksToGenerateData[0];
-        chunksToGenerateData.RemoveAt(0);
-        chunkToProcess.isDataGenerated = true;
-
-        List<BiomeAgent> relevantAgents = biomeManager.GetBiomesInArea(chunkToProcess.chunkPosition);
-        if (relevantAgents.Count == 0)
-        {
-            Debug.LogWarning($"Для чанка {chunkToProcess.chunkPosition} не найдено релевантных агентов. Генерация будет пропущена.");
-            return;
-        }
-
-        int mapSize = biomeManager.regionSize;
-        Vector2Int chunkStartWorldPos = new Vector2Int(chunkToProcess.chunkPosition.x * Chunk.Width, chunkToProcess.chunkPosition.z * Chunk.Width);
+        if (chunksToGenerateData.Count == 0 || runningDataJobs.Count >= settings.maxDataJobsPerFrame) return;
         
-        int regionX = Mathf.FloorToInt((float)chunkStartWorldPos.x / mapSize);
-        int regionZ = Mathf.FloorToInt((float)chunkStartWorldPos.y / mapSize);
-        Vector2 mapOrigin = new Vector2(regionX * mapSize, regionZ * mapSize);
+        Chunk readyChunk = null;
+        Task<Dictionary<int2, int>> completedSimulationTask = null;
 
-        RenderTexture biomeMapRT = mapGenerator.GenerateMap(relevantAgents, mapSize, mapOrigin, biomeManager.neutralZoneWidth);
-
-        if (biomeMapRT == null)
+        foreach (var chunk in chunksToGenerateData)
         {
-            Debug.LogError("Не удалось сгенерировать карту биомов на GPU. GenerateMap вернул null.");
+            Vector2Int regionCoords = new Vector2Int(
+                Mathf.FloorToInt((chunk.chunkPosition.x * Chunk.Width) / (float)biomeManager.regionSize),
+                Mathf.FloorToInt((chunk.chunkPosition.z * Chunk.Width) / (float)biomeManager.regionSize));
+            
+            var simulationTask = biomeManager.GetBiomeSiteGridFor(regionCoords);
+
+            if (simulationTask.IsCompleted)
+            {
+                readyChunk = chunk;
+                completedSimulationTask = simulationTask;
+                break;
+            }
+        }
+        
+        if (readyChunk == null) return;
+        
+        chunksToGenerateData.Remove(readyChunk);
+        readyChunk.isDataGenerated = true;
+
+        var biomeSiteGrid = completedSimulationTask.Result;
+        if (biomeSiteGrid == null || biomeSiteGrid.Count == 0)
+        {
+            Debug.LogWarning($"Для чанка {readyChunk.chunkPosition} карта биомов пуста. Пропускаем.");
             return;
         }
-
-        Texture2D cpuTexture = new Texture2D(mapSize, mapSize, TextureFormat.RGBAFloat, false);
-        RenderTexture.active = biomeMapRT;
-        cpuTexture.ReadPixels(new Rect(0, 0, mapSize, mapSize), 0, 0);
-        cpuTexture.Apply();
-        RenderTexture.active = null;
-
-        NativeArray<float4> fullMapData = cpuTexture.GetRawTextureData<float4>();
         
         var primaryMap = new NativeArray<ushort>(Chunk.Width * Chunk.Width, Allocator.TempJob);
         var secondaryMap = new NativeArray<ushort>(Chunk.Width * Chunk.Width, Allocator.TempJob);
         var blendMap = new NativeArray<float>(Chunk.Width * Chunk.Width, Allocator.TempJob);
-        
-        int mapOriginX = regionX * mapSize;
-        int mapOriginZ = regionZ * mapSize;
-        uint NO_AGENT_ID = 0xFFFFFFFF;
-        
+        int chunkStartX = readyChunk.chunkPosition.x * Chunk.Width;
+        int chunkStartZ = readyChunk.chunkPosition.z * Chunk.Width;
+
         for (int z = 0; z < Chunk.Width; z++)
         {
             for (int x = 0; x < Chunk.Width; x++)
             {
-                int worldX = chunkStartWorldPos.x + x;
-                int worldZ = chunkStartWorldPos.y + z;
+                int mapIndex = x + z * Chunk.Width;
+                int2 siteCoord = new int2(chunkStartX + x, chunkStartZ + z);
 
-                int mapX = worldX - mapOriginX;
-                int mapZ = worldZ - mapOriginZ;
-
-                int chunkMapIndex = x + z * Chunk.Width;
-                int fullMapIndex = mapX + mapZ * mapSize;
-
-                if (fullMapIndex >= 0 && fullMapIndex < fullMapData.Length)
+                if (biomeSiteGrid.TryGetValue(siteCoord, out int ownerId) && ownerId != -1)
                 {
-                    float4 data = fullMapData[fullMapIndex];
+                    BiomeAgent ownerAgent = biomeManager.GetAgent(ownerId);
+                    if (ownerAgent == null) 
+                    {
+                        primaryMap[mapIndex] = settings.globalBiomeBlock.ID;
+                        secondaryMap[mapIndex] = settings.globalBiomeBlock.ID;
+                        blendMap[mapIndex] = 0f;
+                        continue;
+                    }
+                    
+                    primaryMap[mapIndex] = ownerAgent.settings.biome.BiomeBlock.ID;
+                    secondaryMap[mapIndex] = ownerAgent.settings.biome.BiomeBlock.ID;
+                    blendMap[mapIndex] = 0f;
 
-                    int primaryIndex = (int)data.x;
-                    int secondaryIndex = (int)data.y;
+                    if (ownerAgent.isPaired)
+                    {
+                        BiomeAgent partnerAgent = biomeManager.GetAgent(ownerAgent.partnerId);
+                        if (partnerAgent == null) continue;
+                        
+                        BiomeAgent dominant = ownerAgent.initialAggressiveness >= partnerAgent.initialAggressiveness ? ownerAgent : partnerAgent;
+                        BiomeAgent subservient = dominant == ownerAgent ? partnerAgent : ownerAgent;
+                        float dominanceRatio = subservient.initialAggressiveness / (dominant.initialAggressiveness + 0.001f);
+                        float influenceChance = (ownerAgent.uniqueInstanceId == dominant.uniqueInstanceId) ? dominanceRatio * 0.25f : dominanceRatio * 0.5f;
 
-                    primaryMap[chunkMapIndex] = (primaryIndex == NO_AGENT_ID) ? (ushort)0 : relevantAgents[(int)primaryIndex].settings.biome.biomeID;
-                    secondaryMap[chunkMapIndex] = (secondaryIndex == NO_AGENT_ID) ? (ushort)0 : relevantAgents[(int)secondaryIndex].settings.biome.biomeID;
-                    blendMap[chunkMapIndex] = data.z;
+                        if (Mathf.Abs(math.sin(siteCoord.x * 0.1f + siteCoord.y * 0.2f)) < influenceChance) {
+                            secondaryMap[mapIndex] = partnerAgent.settings.biome.BiomeBlock.ID;
+                            blendMap[mapIndex] = 0.5f;
+                        }
+                    }
+                }
+                else 
+                {
+                    primaryMap[mapIndex] = settings.globalBiomeBlock.ID;
+                    secondaryMap[mapIndex] = settings.globalBiomeBlock.ID;
+                    blendMap[mapIndex] = 0f;
                 }
             }
         }
-
-        // Очищаем временные GPU/CPU объекты
-        UnityEngine.Object.Destroy(cpuTexture);
-        biomeMapRT.Release();
-
+        
         var heightNoise = new FastNoiseLite(settings.heightmapNoiseSettings.seed);
         heightNoise.SetFrequency(settings.heightmapNoiseSettings.scale);
         heightNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
@@ -193,7 +195,7 @@ public class VoxelGenerationPipeline
 
         var request = new AsyncChunkDataRequest
         {
-            TargetChunk = chunkToProcess,
+            TargetChunk = readyChunk, // <--- ИСПРАВЛЕНО
             primaryBlockIDs = new NativeArray<ushort>(Chunk.Size, Allocator.Persistent),
             finalColors = new NativeArray<Color32>(Chunk.Size, Allocator.Persistent),
             finalUv0s = new NativeArray<float2>(Chunk.Size, Allocator.Persistent),
@@ -208,7 +210,7 @@ public class VoxelGenerationPipeline
 
         var job = new GenerationJob
         {
-            chunkPosition = chunkToProcess.chunkPosition,
+            chunkPosition = readyChunk.chunkPosition,
             heightMapNoise = heightNoise,
             chunkPrimaryIdMap = primaryMap,
             chunkSecondaryIdMap = secondaryMap,
@@ -228,17 +230,13 @@ public class VoxelGenerationPipeline
         };
         
         JobHandle handle = job.Schedule();
-        
-        // Планируем удаление всех трех временных массивов после завершения основного джоба
         var handle1 = primaryMap.Dispose(handle);
         var handle2 = secondaryMap.Dispose(handle);
         var handle3 = blendMap.Dispose(handle);
-
         request.JobHandle = JobHandle.CombineDependencies(handle1, handle2, handle3);
         
         runningDataJobs.Add(request);
     }
-
 
     private void ProcessMeshGenerationQueue(Func<Vector3Int, Chunk> getChunkCallback)
     {

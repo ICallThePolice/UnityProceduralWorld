@@ -15,7 +15,7 @@ MonoBehaviour:
   worldMaterial: {fileID: 2100000, guid: a5c7f86984c3661408f679bd71cb3506, type: 2}
   renderDistance: 4
   chunkUpdateInterval: 0.25
-  biomeMapComputeShader: {fileID: 7200000, guid: 7b8e4a6bbc28a1e439c319acb0d54723, type: 3}
+  biomeMapComputeShader: {fileID: 7200000, guid: b539ed10b9e4aa54ca1caff644ec80a7, type: 3}
   maxDataJobsPerFrame: 4
   maxMeshJobsPerFrame: 4
   chunkLingerTime: 1
