@@ -1,4 +1,4 @@
-// --- ФАЙЛ: _Project/_Scripts/Core/Jobs/GenerationJob.cs (ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ) ---
+// --- ФАЙЛ: GenerationJob.cs (БЕЗ ДИЗЕРИНГА) ---
 using UnityEngine;
 using Unity.Burst;
 using Unity.Collections;
@@ -11,6 +11,7 @@ public struct GenerationJob : IJob
     [ReadOnly] public Vector3Int chunkPosition;
     [ReadOnly] public FastNoiseLite heightMapNoise;
     
+    // Теперь нам снова нужны все три карты
     [ReadOnly] public NativeArray<ushort> chunkPrimaryIdMap; 
     [ReadOnly] public NativeArray<ushort> chunkSecondaryIdMap;
     [ReadOnly] public NativeArray<float> chunkBlendMap;
@@ -37,41 +38,32 @@ public struct GenerationJob : IJob
             {
                 int mapIndex = x + z * Chunk.Width;
                 
+                // --- ВОЗВРАЩАЕМ ЛОГИКУ СМЕШИВАНИЯ ДЛЯ PBR ШЕЙДЕРА ---
                 ushort primaryID = chunkPrimaryIdMap[mapIndex];
                 ushort secondaryID = chunkSecondaryIdMap[mapIndex];
+                float blendFactor = chunkBlendMap[mapIndex];
 
-                // --- ЗАЩИТА ОТ НЕВЕРНЫХ ID ---
-                // Если ID выходит за пределы карты, используем глобальный ID по умолчанию
-                if (primaryID >= voxelTypeMap.Length) primaryID = globalBiomeBlockID;
-                if (secondaryID >= voxelTypeMap.Length) secondaryID = globalBiomeBlockID;
-                
+                if (primaryID == 0) primaryID = globalBiomeBlockID;
+                if (secondaryID == 0) secondaryID = primaryID;
+
                 VoxelTypeDataBurst primaryProps = voxelTypeMap[primaryID];
                 VoxelTypeDataBurst secondaryProps = voxelTypeMap[secondaryID];
                 
                 var worldPos = new float2(chunkPosition.x * Chunk.Width + x, chunkPosition.z * Chunk.Width + z);
-                
-                // --- ЛОГИКА ВЫСОТЫ ---
                 float heightValue = heightMapNoise.GetNoise(worldPos.x, worldPos.y);
-                int baseSurfaceHeight = (int)math.remap(-1, 1, 10, 25, heightValue); // Базовая высота ландшафта
+                int surfaceHeight = (int)math.remap(-1, 1, 10, Chunk.Height - 10, heightValue);
                 
-                // Простое изменение высоты: биомы с ID > 1 (не глобальный) будут выше
-                int biomeHeightOffset = primaryID > 1 ? 5 : 0;
-                int surfaceHeight = baseSurfaceHeight + biomeHeightOffset;
-                surfaceHeight = math.clamp(surfaceHeight, 1, Chunk.Height - 1);
-
                 for (int y = 0; y < Chunk.Height; y++)
                 {
                     int voxelIndex = Chunk.GetVoxelIndex(x, y, z);
-                    if (y >= surfaceHeight) 
-                    { 
-                        primaryBlockIDs[voxelIndex] = 0; // Air
+                    if (y >= surfaceHeight) { 
+                        primaryBlockIDs[voxelIndex] = 0;
                         continue; 
                     }
 
-                    float blendFactor = chunkBlendMap[mapIndex];
-                    
+                    // Просто передаем данные для смешивания в PBR шейдер
                     primaryBlockIDs[voxelIndex] = primaryProps.id;
-                    finalColors[voxelIndex] = Color.Lerp(primaryProps.baseColor, secondaryProps.baseColor, blendFactor);
+                    finalColors[voxelIndex] = Color32.Lerp(primaryProps.baseColor, secondaryProps.baseColor, blendFactor);
                     finalUv0s[voxelIndex] = primaryProps.baseUV;
                     finalUv1s[voxelIndex] = secondaryProps.baseUV;
                     finalTexBlends[voxelIndex] = blendFactor;
@@ -86,8 +78,5 @@ public struct GenerationJob : IJob
         }
     }
     
-    private float4 ToFloat4(Color32 c)
-    {
-        return new float4(c.r / 255f, c.g / 255f, c.b / 255f, c.a / 255f);
-    }
+    private float4 ToFloat4(Color32 c) { return new float4(c.r / 255f, c.g / 255f, c.b / 255f, c.a / 255f); }
 }

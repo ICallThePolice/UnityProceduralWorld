@@ -12,14 +12,12 @@ public class VoxelGenerationPipeline
 {
     public event Action<Chunk, Mesh> OnChunkMeshReady;
     private readonly WorldSettingsSO settings;
-
-    // --- УПРАВЛЕНИЕ РЕГИОНАМИ ---
+    
     private readonly GPUBiomeMapGenerator gpuGenerator;
     private readonly Dictionary<Vector2Int, RegionData> generatedRegions = new Dictionary<Vector2Int, RegionData>();
     private readonly HashSet<Vector2Int> regionsBeingGenerated = new HashSet<Vector2Int>();
-    private readonly int regionSize = 256; // Размер региона в вокселях
+    private readonly int regionSize = 256;
 
-    // --- ОЧЕРЕДИ И ЗАДАЧИ ---
     private readonly List<Chunk> chunksToGenerateData = new List<Chunk>();
     private readonly List<Chunk> chunksToGenerateMesh = new List<Chunk>();
     private readonly List<AsyncChunkDataRequest> runningDataJobs = new List<AsyncChunkDataRequest>();
@@ -32,25 +30,8 @@ public class VoxelGenerationPipeline
         this.settings = settings;
         InitializeVoxelTypeMap();
         
-        // Передаем в GPU генератор необходимые ему ассеты
         gpuGenerator = new GPUBiomeMapGenerator(settings.biomeMapComputeShader, biomeManager.biomeMap);
     }
-
-    public VoxelTypeDataBurst GetVoxelTypeData(ushort id)
-    {
-        if (voxelTypeMap.IsCreated && id < voxelTypeMap.Length)
-        {
-            return voxelTypeMap[id];
-        }
-        return default;
-    }
-
-    public RegionData GetRegionData(Vector2Int regionCoords)
-    {
-        generatedRegions.TryGetValue(regionCoords, out RegionData data);
-        return data;
-    }
-
     public void RequestDataGeneration(Chunk chunk)
     {
         if (!chunksToGenerateData.Contains(chunk) && !chunk.isDataGenerated && !chunk.isDataJobRunning)
@@ -63,83 +44,40 @@ public class VoxelGenerationPipeline
             chunksToGenerateMesh.Add(chunk);
     }
 
-    public void CancelChunkGeneration(Vector3Int chunkPos)
-    {
-        chunksToGenerateData.RemoveAll(c => c.chunkPosition == chunkPos);
-        chunksToGenerateMesh.RemoveAll(c => c.chunkPosition == chunkPos);
-    }
-
-    private void InitializeVoxelTypeMap()
-    {
-        if (settings.voxelTypes == null || settings.voxelTypes.Count == 0) return;
-        ushort maxId = 0;
-        foreach (var voxelType in settings.voxelTypes)
-        {
-            if (voxelType != null && voxelType.ID > maxId) maxId = voxelType.ID;
-        }
-        voxelTypeMap = new NativeArray<VoxelTypeDataBurst>(maxId + 1, Allocator.Persistent);
-        foreach (var voxelType in settings.voxelTypes)
-        {
-            if (voxelType == null) continue;
-            voxelTypeMap[voxelType.ID] = new VoxelTypeDataBurst
-            {
-                id = voxelType.ID,
-                isSolid = voxelType.isSolid,
-                baseColor = voxelType.baseColor,
-                baseUV = new float2(voxelType.textureAtlasCoord.x, voxelType.textureAtlasCoord.y),
-                gapWidth = voxelType.GapWidth,
-                gapColor = voxelType.GapColor,
-                bevelData = new float3(voxelType.BevelWidth, voxelType.BevelStrength, voxelType.BevelDirection)
-            };
-        }
-    }
 
     public void ProcessQueues(Func<Vector3Int, Chunk> getChunkCallback)
     {
+        RequestNeededRegions(chunksToGenerateData.Select(GetRegionCoordsForChunk).ToList());
         ProcessDataGenerationQueue();
         ProcessMeshGenerationQueue(getChunkCallback);
     }
 
-    private void RequestNeededRegions()
+    public void RequestNeededRegions(List<Vector2Int> regionCoordsList)
     {
-        // 1. Собираем все уникальные регионы, которые нужны чанкам в очереди
-        var neededRegions = new HashSet<Vector2Int>();
-        foreach (var chunk in chunksToGenerateData)
-        {
-            neededRegions.Add(GetRegionCoordsForChunk(chunk));
-        }
-
-        // 2. Запускаем генерацию для каждого региона, который еще не готов и не в процессе
+        var neededRegions = new HashSet<Vector2Int>(regionCoordsList);
         foreach (var regionCoords in neededRegions)
         {
             if (!generatedRegions.ContainsKey(regionCoords) && !regionsBeingGenerated.Contains(regionCoords))
             {
                 regionsBeingGenerated.Add(regionCoords);
-                gpuGenerator.GenerateMap(regionCoords, regionSize, (data) =>
+                gpuGenerator.GenerateMap(regionCoords, regionSize, this.settings, (data) =>
                 {
-                    if (data != null)
-                    {
-                        generatedRegions.Add(regionCoords, data);
-                    }
+                    if (data != null) { generatedRegions.Add(regionCoords, data); }
                     regionsBeingGenerated.Remove(regionCoords);
                 });
             }
         }
     }
-
+    
     private void ProcessDataGenerationQueue()
     {
-        if (runningDataJobs.Count >= settings.maxDataJobsPerFrame) return;
+        if (chunksToGenerateData.Count == 0 || runningDataJobs.Count >= settings.maxDataJobsPerFrame) return;
 
-        // Создаем список чанков, которые можно обработать ПРЯМО СЕЙЧАС
         var readyChunks = chunksToGenerateData
             .Where(chunk => generatedRegions.ContainsKey(GetRegionCoordsForChunk(chunk)))
             .ToList();
-
-        if (readyChunks.Count == 0) return;
-
-        // Обрабатываем все готовые чанки, пока не упремся в лимит
-        foreach (var chunkToProcess in readyChunks)
+        
+        foreach(var chunkToProcess in readyChunks)
         {
             if (runningDataJobs.Count >= settings.maxDataJobsPerFrame) break;
 
@@ -148,19 +86,12 @@ public class VoxelGenerationPipeline
             StartGenerationJob(chunkToProcess, regionData);
         }
     }
-    
-    private Vector2Int GetRegionCoordsForChunk(Chunk chunk)
-    {
-        return new Vector2Int(
-            Mathf.FloorToInt(chunk.chunkPosition.x * Chunk.Width / (float)regionSize),
-            Mathf.FloorToInt(chunk.chunkPosition.z * Chunk.Width / (float)regionSize)
-        );
-    }
 
     private void StartGenerationJob(Chunk chunk, RegionData regionData)
     {
         chunk.isDataJobRunning = true;
 
+        // Создаем все три NativeArray, которые ожидает GenerationJob
         var primaryMap = new NativeArray<ushort>(Chunk.Width * Chunk.Width, Allocator.TempJob);
         var secondaryMap = new NativeArray<ushort>(Chunk.Width * Chunk.Width, Allocator.TempJob);
         var blendMap = new NativeArray<float>(Chunk.Width * Chunk.Width, Allocator.TempJob);
@@ -172,17 +103,23 @@ public class VoxelGenerationPipeline
         {
             for (int z = 0; z < Chunk.Width; z++)
             {
-                int regionLocalX = (startX + x) % regionSize;
-                int regionLocalZ = (startZ + z) % regionSize;
+                int worldX = startX + x;
+                int worldZ = startZ + z;
+                
+                int regionLocalX = worldX % regionSize;
+                int regionLocalZ = worldZ % regionSize;
                 if (regionLocalX < 0) regionLocalX += regionSize;
                 if (regionLocalZ < 0) regionLocalZ += regionSize;
 
-                Color biomeColor = regionData.GetValue(regionLocalX, regionLocalZ);
+                // Получаем цвет, в котором закодированы все наши данные
+                Color biomeDataColor = regionData.GetValue(regionLocalX, regionLocalZ);
 
                 int mapIndex = x + z * Chunk.Width;
-                primaryMap[mapIndex] = (ushort)biomeColor.r;
-                secondaryMap[mapIndex] = (ushort)biomeColor.g;
-                blendMap[mapIndex] = biomeColor.b;
+                
+                // --- Распаковываем данные ---
+                primaryMap[mapIndex] = (ushort)biomeDataColor.r;      // ID основного биома
+                secondaryMap[mapIndex] = (ushort)biomeDataColor.g;    // ID вторичного биома
+                blendMap[mapIndex] = biomeDataColor.b;        // Фактор смешивания
             }
         }
 
@@ -230,6 +167,7 @@ public class VoxelGenerationPipeline
         };
 
         JobHandle handle = job.Schedule();
+        
         var handle1 = primaryMap.Dispose(handle);
         var handle2 = secondaryMap.Dispose(handle);
         var handle3 = blendMap.Dispose(handle);
@@ -339,6 +277,7 @@ public class VoxelGenerationPipeline
                 var chunk = request.TargetChunk;
                 if (chunk != null)
                 {
+                    Debug.Log($"<color=green>[Pipeline] DataJob для чанка {chunk.chunkPosition} УСПЕШНО ЗАВЕРШЕН. Запрашиваем меш.</color>");
                     request.primaryBlockIDs.CopyTo(chunk.primaryBlockIDs);
                     request.finalColors.CopyTo(chunk.finalColors);
                     request.finalUv0s.CopyTo(chunk.finalUv0s);
@@ -368,6 +307,9 @@ public class VoxelGenerationPipeline
             if (request.JobHandle.IsCompleted)
             {
                 request.JobHandle.Complete();
+
+                Debug.Log($"<color=cyan>[Pipeline] MeshJob для чанка {request.TargetChunk.chunkPosition} ЗАВЕРШЕН. Вершин: {request.Vertices.Length}. Треугольников: {request.Triangles.Length}.</color>");
+                
                 Mesh mesh = new Mesh();
 
                 if (request.Vertices.Length > 0 && request.Triangles.Length > 0)
@@ -406,6 +348,62 @@ public class VoxelGenerationPipeline
                 runningMeshJobs.RemoveAt(i);
             }
         }
+    }
+
+    private void InitializeVoxelTypeMap()
+    {
+        if (settings.voxelTypes == null || settings.voxelTypes.Count == 0) return;
+        ushort maxId = 0;
+        foreach (var voxelType in settings.voxelTypes)
+        {
+            if (voxelType != null && voxelType.ID > maxId) maxId = voxelType.ID;
+        }
+        voxelTypeMap = new NativeArray<VoxelTypeDataBurst>(maxId + 1, Allocator.Persistent);
+        foreach (var voxelType in settings.voxelTypes)
+        {
+            if (voxelType == null) continue;
+            voxelTypeMap[voxelType.ID] = new VoxelTypeDataBurst
+            {
+                id = voxelType.ID,
+                isSolid = voxelType.isSolid,
+                baseColor = voxelType.baseColor,
+                baseUV = new float2(voxelType.textureAtlasCoord.x, voxelType.textureAtlasCoord.y),
+                gapWidth = voxelType.GapWidth,
+                gapColor = voxelType.GapColor,
+                bevelData = new float3(voxelType.BevelWidth, voxelType.BevelStrength, voxelType.BevelDirection)
+            };
+        }
+    }
+    
+    private Vector2Int GetRegionCoordsForChunk(Chunk chunk)
+    {
+        return new Vector2Int(
+            Mathf.FloorToInt(chunk.chunkPosition.x * Chunk.Width / (float)regionSize),
+            Mathf.FloorToInt(chunk.chunkPosition.z * Chunk.Width / (float)regionSize)
+        );
+    }
+
+    // Вспомогательный метод для публичного доступа к данным вокселя (если потребуется из других систем)
+    public VoxelTypeDataBurst GetVoxelTypeData(ushort id)
+    {
+        if (voxelTypeMap.IsCreated && id < voxelTypeMap.Length)
+        {
+            return voxelTypeMap[id];
+        }
+        return default;
+    }
+
+    // Вспомогательный метод для публичного доступа к данным региона (например, для миникарты)
+    public RegionData GetRegionData(Vector2Int regionCoords)
+    {
+        generatedRegions.TryGetValue(regionCoords, out RegionData data);
+        return data;
+    }
+
+    public void CancelChunkGeneration(Vector3Int chunkPos)
+    {
+        chunksToGenerateData.RemoveAll(c => c.chunkPosition == chunkPos);
+        chunksToGenerateMesh.RemoveAll(c => c.chunkPosition == chunkPos);
     }
 
     public void Dispose()

@@ -67,7 +67,7 @@ public class ChunkManager
         {
             if (!activeChunks.ContainsKey(chunkPos))
             {
-                //Debug.Log($"[ChunkManager] Создание нового чанка в позиции {chunkPos}"); // <-- ДОБАВИТЬ ЛОГ
+                Debug.Log($"[ChunkManager] Создаем новый чанк в позиции {chunkPos} и запрашиваем генерацию данных.");
                 Chunk newChunk = new Chunk(chunkPos);
                 activeChunks.Add(chunkPos, newChunk);
                 pipeline.RequestDataGeneration(newChunk);

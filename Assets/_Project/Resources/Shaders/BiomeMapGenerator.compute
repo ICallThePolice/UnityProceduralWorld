@@ -1,13 +1,19 @@
-// ФАЙЛ: BiomeMapGenerator.compute (ИСПРАВЛЕННАЯ ВЕРСИЯ)
 #pragma kernel GenerateBiomeMap
 
-// Входные данные от CPU
 RWTexture2D<float4> Result;
+StructuredBuffer<float4> BiomeData; // x: TypeID, yz: Pos, w: InstanceID
+
 float2 WorldOffset;
 float AtlasSize;
-StructuredBuffer<float3> BiomeData;
+float MaxComplexityDistance;
+float EasyFrequencyMultiplier;
+float HardFrequencyMultiplier;
+float ErosionThreshold;
+float ErosionNoiseScale;
+uint NeutralBiomeID;
 
-// --- Упрощенная и рабочая версия шума ---
+
+// --- Блок шума (Simplex Noise) ---
 float2 hash(float2 p)
 {
     p = float2(dot(p, float2(127.1, 311.7)),
@@ -26,7 +32,6 @@ float simplex_noise(float2 p) {
     float2 c = a - 1.0 + 2.0 * K2;
 
     float3 h = max(0.5 - float3(dot(a, a), dot(b, b), dot(c, c)), 0.0);
-    // Исправлена ошибка в вызове hash()
     float3 n = h * h * h * h * float3(dot(a, hash(i)), dot(b, hash(i + o)), dot(c, hash(i + 1.0)));
 
     return dot(n, float3(70.0, 70.0, 70.0));
@@ -36,54 +41,71 @@ float GetNoise(float2 pos, float frequency)
 {
     return simplex_noise(pos * frequency);
 }
-// --- КОНЕЦ БЛОКА ШУМА ---
+
 
 [numthreads(8,8,1)]
 void GenerateBiomeMap (uint3 id : SV_DispatchThreadID)
 {
     float2 globalPos = WorldOffset + id.xy;
 
-    // Параметры шума (можно будет вынести в настройки)
-    float chaosFreq = 0.002;
-    float saturationFreq = 0.002;
+    float distFromOrigin = length(globalPos);
+    float complexityT = saturate(distFromOrigin / MaxComplexityDistance);
+    float currentFreqMultiplier = lerp(EasyFrequencyMultiplier, HardFrequencyMultiplier, complexityT);
+
+    float chaosFreq = 0.002 * currentFreqMultiplier;
+    float saturationFreq = 0.002 * currentFreqMultiplier;
 
     float chaos = GetNoise(globalPos, chaosFreq);
     float saturation = GetNoise(globalPos + float2(123.4, -543.2), saturationFreq);
     float2 targetPos = float2(chaos, saturation);
 
+    // --- ЛОГИКА ОСТАЕТСЯ ПРЕЖНЕЙ: ИЩЕМ 2 БЛИЖАЙШИХ ЭКЗЕМПЛЯРА ---
     float closestDistSq = 1000000.0;
     float secondClosestDistSq = 1000000.0;
     uint closestIdx = 0;
     uint secondClosestIdx = 0;
 
-    for (uint i = 0; i < (uint)AtlasSize; i++)
-    {
+    for (uint i = 0; i < (uint)AtlasSize; i++) {
         float2 biomePos = BiomeData[i].yz;
         float distSq = dot(targetPos - biomePos, targetPos - biomePos);
-        if (distSq < closestDistSq)
-        {
+        if (distSq < closestDistSq) {
             secondClosestDistSq = closestDistSq;
             secondClosestIdx = closestIdx;
             closestDistSq = distSq;
             closestIdx = i;
-        }
-        else if (distSq < secondClosestDistSq)
-        {
+        } else if (distSq < secondClosestDistSq) {
             secondClosestDistSq = distSq;
             secondClosestIdx = i;
         }
     }
     
+    // --- Получаем ID ТИПОВ для победителей ---
+    uint primaryTypeID = (uint)BiomeData[closestIdx].x;
+    uint secondaryTypeID = (AtlasSize > 1) ? (uint)BiomeData[secondClosestIdx].x : primaryTypeID;
+    
+    // --- Получаем УНИКАЛЬНЫЕ ID для победителей ---
+    // Они нам понадобятся для будущей логики пар и кластеров
+    uint primaryInstanceID = (uint)BiomeData[closestIdx].w;
+    uint secondaryInstanceID = (AtlasSize > 1) ? (uint)BiomeData[secondClosestIdx].w : primaryInstanceID;
+    
     float blendFactor = 0.0;
-    if (AtlasSize > 1 && secondClosestDistSq < 999999.0)
+    
+    if (AtlasSize > 1 && primaryInstanceID != secondaryInstanceID)
     {
         float dist1 = sqrt(closestDistSq);
         float dist2 = sqrt(secondClosestDistSq);
         blendFactor = saturate(dist1 / (dist1 + dist2 + 0.0001));
     }
     
-    float primaryID = BiomeData[closestIdx].x;
-    float secondaryID = (AtlasSize > 1) ? BiomeData[secondClosestIdx].x : primaryID;
-    
-    Result[id.xy] = float4(primaryID, secondaryID, blendFactor, 0);
+    // --- Логика Эрозии ---
+    float erosionNoise = GetNoise(globalPos, ErosionNoiseScale);
+    if (erosionNoise < ErosionThreshold)
+    {
+        primaryTypeID = NeutralBiomeID;
+        secondaryTypeID = NeutralBiomeID;
+        blendFactor = 0;
+    }
+
+    // В Result теперь пишем: (ID основного ТИПА, ID вторичного ТИПА, Фактор смешивания, ID основного ЭКЗЕМПЛЯРА)
+    Result[id.xy] = float4(primaryTypeID, secondaryTypeID, blendFactor, primaryInstanceID);
 }

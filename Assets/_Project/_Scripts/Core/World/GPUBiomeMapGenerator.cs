@@ -1,4 +1,4 @@
-// --- ФАЙЛ: GPUBiomeMapGenerator.cs ---
+// --- ФАЙЛ: GPUBiomeMapGenerator.cs (МНОГОПРОХОДНАЯ ВЕРСИЯ) ---
 using UnityEngine;
 using UnityEngine.Rendering;
 using System;
@@ -8,79 +8,79 @@ public class GPUBiomeMapGenerator
 {
     private ComputeShader shader;
     private int kernelHandle;
+    private int generationKernel;
+    private int filteringKernel;
     private BiomeMapSO biomeMap;
 
     public GPUBiomeMapGenerator(ComputeShader computeShader, BiomeMapSO biomeMap)
     {
-        if (computeShader == null || biomeMap == null)
-        {
-            Debug.LogError("Compute Shader или BiomeMap не переданы в GPUBiomeMapGenerator!");
-            return;
-        }
         this.shader = computeShader;
         this.biomeMap = biomeMap;
         this.kernelHandle = shader.FindKernel("GenerateBiomeMap");
     }
-
-    public void GenerateMap(Vector2Int regionCoords, int regionSize, Action<RegionData> onComplete)
+    public void GenerateMap(Vector2Int regionCoords, int regionSize, WorldSettingsSO settings, Action<RegionData> onComplete)
     {
-        RenderTexture target = new RenderTexture(regionSize, regionSize, 0, RenderTextureFormat.ARGBFloat)
-        {
-            enableRandomWrite = true
-        };
-        target.Create();
+        RenderTexture initialMap = new RenderTexture(regionSize, regionSize, 0, RenderTextureFormat.RInt) { enableRandomWrite = true };
+        initialMap.Create();
+        
+        RenderTexture finalMap = new RenderTexture(regionSize, regionSize, 0, RenderTextureFormat.ARGBFloat) { enableRandomWrite = true };
+        finalMap.Create();
 
-        var biomeDataArray = new Vector3[biomeMap.biomeMappings.Length];
+        // --- ИЗМЕНЕНИЕ: Теперь мы передаем Vector4 ---
+        // x = ID ТИПА биома, yz = позиция, w = УНИКАЛЬНЫЙ ID ЭКЗЕМПЛЯРА
+        var biomeDataArray = new Vector4[biomeMap.biomeMappings.Length];
         for (int i = 0; i < biomeMap.biomeMappings.Length; i++)
         {
             var mapping = biomeMap.biomeMappings[i];
-            if(mapping.biome == null || mapping.biome.BiomeBlock == null)
-            {
-                 Debug.LogError($"Ошибка в ассете BiomeMap! Элемент {i} не настроен корректно.");
-                 continue;
-            }
-            biomeDataArray[i] = new Vector3(mapping.biome.BiomeBlock.ID, mapping.position.x, mapping.position.y);
+            // Уникальный ID экземпляра - это просто его индекс в массиве.
+            biomeDataArray[i] = new Vector4(mapping.biome.BiomeBlock.ID, mapping.position.x, mapping.position.y, i + 1); // +1 чтобы 0 был зарезервирован
         }
-
-        using (var biomeBuffer = new ComputeBuffer(biomeDataArray.Length, sizeof(float) * 3))
+        
+        // Используем буфер для Vector4
+        using (var biomeBuffer = new ComputeBuffer(biomeDataArray.Length, sizeof(float) * 4))
         {
             biomeBuffer.SetData(biomeDataArray);
-            shader.SetBuffer(kernelHandle, "BiomeData", biomeBuffer);
+            
+            // --- ПРОХОД 1: ГЕНЕРАЦИЯ ПОЛИТИЧЕСКОЙ КАРТЫ ---
+            shader.SetBuffer(generationKernel, "BiomeData", biomeBuffer);
+            shader.SetTexture(generationKernel, "InitialResult", initialMap);
+            shader.SetVector("WorldOffset", new Vector4(regionCoords.x * regionSize, regionCoords.y * regionSize, 0, 0));
+            shader.SetFloat("AtlasSize", biomeMap.biomeMappings.Length);
+            shader.SetFloat("MaxComplexityDistance", settings.maxComplexityDistance);
+            shader.SetFloat("EasyFrequencyMultiplier", settings.easyFrequencyMultiplier);
+            shader.SetFloat("HardFrequencyMultiplier", settings.hardFrequencyMultiplier);
+            
+            int threadGroups = Mathf.CeilToInt(regionSize / 8.0f);
+            shader.Dispatch(generationKernel, threadGroups, threadGroups, 1);
+
+            // --- ПРОХОД 2: ФИЛЬТРАЦИЯ И ЭРОЗИЯ ---
+            shader.SetInt("RegionSize", regionSize);
+            shader.SetInt("FilteringRadius", settings.filteringRadius);
+            shader.SetFloat("RequiredNeighborPercentage", settings.requiredNeighborPercentage);
+            shader.SetInt("NeutralBiomeID", settings.globalBiomeBlock.ID);
+            shader.SetFloat("ErosionThreshold", settings.erosionThreshold);
+            shader.SetFloat("ErosionNoiseScale", settings.erosionNoiseScale);
+            shader.SetTexture(filteringKernel, "InitialMap", initialMap);
+            shader.SetTexture(filteringKernel, "FinalResult", finalMap);
+            
+            shader.Dispatch(filteringKernel, threadGroups, threadGroups, 1);
         }
 
-        shader.SetTexture(kernelHandle, "Result", target);
-        shader.SetVector("WorldOffset", new Vector4(regionCoords.x * regionSize, regionCoords.y * regionSize, 0, 0));
-        shader.SetFloat("AtlasSize", biomeMap.biomeMappings.Length);
-
-        int threadGroups = Mathf.CeilToInt(regionSize / 8.0f);
-        shader.Dispatch(kernelHandle, threadGroups, threadGroups, 1);
-
-        AsyncGPUReadback.Request(target, 0, (request) =>
+        // 3. Читаем данные из ИТОГОВОЙ текстуры (finalMap)
+        AsyncGPUReadback.Request(finalMap, 0, (request) =>
         {
-            if (request.hasError)
+            if (request.hasError) { onComplete?.Invoke(null); } 
+            else 
             {
-                Debug.LogError("Ошибка чтения карты биомов с GPU!");
-                onComplete?.Invoke(null);
-            }
-            else
-            {
-                // --- ГЛАВНОЕ ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-                // 1. Получаем временный массив от Unity
                 NativeArray<Color> tempData = request.GetData<Color>();
-                
-                // 2. Создаем наш собственный постоянный массив нужного размера
                 NativeArray<Color> persistentData = new NativeArray<Color>(tempData.Length, Allocator.Persistent);
-
-                // 3. Явно копируем данные из временного массива в наш постоянный
                 persistentData.CopyFrom(tempData);
-
-                // 4. Создаем RegionData, который теперь владеет надежным, постоянным массивом
                 var regionData = new RegionData(persistentData, regionSize, regionSize);
-
                 onComplete?.Invoke(regionData);
             }
-            // Уничтожаем временную текстуру, она больше не нужна
-            target.Release();
+            // Освобождаем обе временные текстуры
+            initialMap.Release();
+            finalMap.Release();
         });
     }
 }
